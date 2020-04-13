@@ -20,10 +20,11 @@ class MapInfo {
     final String mapName;
     final String keyType;
     final String valueType;
-    private final AtomicInteger transactionId = new AtomicInteger(0);
+    private final AtomicInteger mapTransactionId = new AtomicInteger(0);
     private final Map<String, RegisteredClient> registrationClientsByUuid = new ConcurrentHashMap<>();
     private final Map<String, RegisteredClient> registrationClientsByChannelId = new ConcurrentHashMap<>();
-    private final TreeMap<Integer, Transaction> transactionMap = new TreeMap<>();
+    private final TreeMap<Integer, Transaction> transactionsByMapTransId = new TreeMap<>();
+    private final HashMap<ByteString, Transaction> transactionsByKey = new HashMap<>();
     private final Map<ByteString, LockEntry> keyLockMap = new HashMap<>();
     private LockEntry mapLock = null;
 
@@ -72,12 +73,12 @@ class MapInfo {
         return registrationClientsByChannelId.get(channelId);
     }
 
-    int getTransactionId() {
-        return transactionId.get();
+    int getMapTransactionId() {
+        return mapTransactionId.get();
     }
 
     Collection<Transaction> getTransactionsLargerThen(int transactionId) {
-        return transactionMap.tailMap(transactionId, false).values();
+        return transactionsByMapTransId.tailMap(transactionId, false).values();
     }
     
     boolean canAcquireKeyLock(ByteString key, String uuid) {
@@ -142,17 +143,17 @@ class MapInfo {
     }
 
     void addTransaction(Transaction transaction) {
-        int transId = transaction.getId();
+        int keyTransId = transaction.getKeyTransactionId();
         ByteString transKey = transaction.getKey();
-        Preconditions.checkArgument(getTransactionId() + 1 == transId);
+        Preconditions.checkArgument(transactionsByKey.get(transKey).getKeyTransactionId() + 1 == keyTransId);
 
-        transactionMap.put(transId, transaction);
-        transactionId.incrementAndGet();
+        transactionsByKey.put(transKey, transaction);
+        transactionsByMapTransId.put(mapTransactionId.get(), transaction);
 
         // delete old transactions for this key
-        for (Iterator<Transaction> it = transactionMap.values().iterator(); it.hasNext();) {
+        for (Iterator<Transaction> it = transactionsByMapTransId.values().iterator(); it.hasNext();) {
             Transaction oldTrans = it.next();
-            if (oldTrans.getId() != transId && oldTrans.getKey().equals(transKey)) {
+            if (oldTrans.getKeyTransactionId() != keyTransId && oldTrans.getKey().equals(transKey)) {
                 it.remove();
                 break; // there should only be one transaction per key
             }
@@ -188,6 +189,10 @@ class MapInfo {
     
     void updateMapLock() {
         mapLock.timeLockAcquired = System.currentTimeMillis();
+    }
+    
+    int getLatestKeyTransactionId(ByteString key) {
+        return transactionsByKey.get(key).getKeyTransactionId();
     }
 
     class RegisteredClient {

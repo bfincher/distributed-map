@@ -67,7 +67,7 @@ enum TransactionType {
 }
 
 message Transaction {
-    int32 id = 1;
+    int32 keyTransactionId = 1;
     bytes key = 2;
     bytes value = 3;
     TransactionType transType = 4;
@@ -76,6 +76,7 @@ message Transaction {
 message ClientTransactionUpdate {
     string mapName = 1;
     repeated Transaction transactions = 2;
+    uint32 mapTransactionId = 3;
 };
 
 message RequestMapChange {
