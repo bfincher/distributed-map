@@ -6,7 +6,7 @@ message Register {
     string mapName = 1;
     string keyType = 2;
     string valueType = 3;
-    int32 lastMapTransId = 4;
+    uint32 lastMapTransId = 4;
     string uuid = 5;
 }
 
@@ -28,7 +28,7 @@ message DeRegister {
 message RequestKeyLock {
     string mapName = 1;
     bytes key = 2;
-    int32 latestTransId = 3;
+    uint32 latestTransId = 3;
     string uuid = 4;
 }
 
@@ -42,13 +42,13 @@ message ReleaseKeyLock {
     string mapName = 1;
     bytes key = 2;
     string uuid = 3;
-    int32 latestTransId = 4;
+    uint32 latestTransId = 4;
 }
 
 message RequestMapLock {
     string mapName = 1;
     string uuid = 2;
-    int32 latestTransId = 3;
+    uint32 latestTransId = 3;
 }
 
 message RequestMapLockResponse {
@@ -61,15 +61,16 @@ message ReleaseMapLock {
     string uuid = 2;
 }
 
-enum TransactionType {
-    UPDATE = 0;
-    DELETE = 1;
-}
-
 message Transaction {
-    int32 keyTransactionId = 1;
+    uint32 keyTransactionId = 1;
     bytes key = 2;
     bytes value = 3;
+    
+    enum TransactionType {
+        UPDATE = 0;
+        DELETE = 1;
+    }
+    
     TransactionType transType = 4;
 }
 
