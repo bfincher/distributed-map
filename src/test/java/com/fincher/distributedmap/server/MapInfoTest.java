@@ -8,9 +8,9 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.fincher.distributedmap.Transaction;
-import com.fincher.distributedmap.TransactionType;
 import com.fincher.distributedmap.server.MapInfo.Lock;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
+import com.fincher.distributedmap.server.MapInfo.TransactionMapEntry;
 import com.google.common.base.Stopwatch;
 import com.google.protobuf.ByteString;
 
@@ -28,7 +28,7 @@ public class MapInfoTest {
     private static final String TEST_KEY_TYPE = "java.lang.String";
     private static final String TEST_VALUE_TYPE = "java.lang.Integer";
     private static final String TEST_UUID = "testUuid";
-    private static final String TEST_CHANNEL_ID = "testChannelId";
+    private static final String TEST_CHANNEL_ID = "testCha`nnelId";
 
     private MapInfo info;
 
@@ -222,10 +222,53 @@ public class MapInfoTest {
         Transaction t1 = Transaction.newBuilder()
         .setKey(key1)
         .setValue(value1)
-        .setTransType(TransactionType.UPDATE)
+        .setTransType(Transaction.TransactionType.UPDATE)
         .build();
         
         info.addTransaction(t1);
-        assertEquals(t1, info.transactions.getByKey(key1).transaction);
+        TransactionMapEntry entry = info.transactions.getByKey(key1);
+        assertEquals(t1, entry.transaction);
+        assertEquals(1, entry.mapTransactionId);
+        assertEquals(entry, info.transactions.getByMapTransId(entry.mapTransactionId));
+        
+        ByteString key2 = ByteString.copyFromUtf8("key2");
+        ByteString value2 =  ByteString.copyFromUtf8("value2");
+        Transaction t2 = Transaction.newBuilder()
+                .setKey(key2)
+                .setValue(value2)
+                .setTransType(Transaction.TransactionType.UPDATE)
+                .build();
+        
+        info.addTransaction(t2);
+        entry = info.transactions.getByKey(key2);
+        assertEquals(t2, entry.transaction);
+        assertEquals(2, entry.mapTransactionId);
+        assertEquals(entry, info.transactions.getByMapTransId(entry.mapTransactionId));
+        
+        ByteString value3 =  ByteString.copyFromUtf8("value3");
+        Transaction t3 = Transaction.newBuilder()
+                .setKey(key1)
+                .setValue(value3)
+                .setTransType(Transaction.TransactionType.UPDATE)
+                .build();
+        
+        info.addTransaction(t3);
+        entry = info.transactions.getByKey(key1);
+        assertEquals(t3, entry.transaction);
+        assertEquals(3, entry.mapTransactionId);
+        assertEquals(entry, info.transactions.getByMapTransId(entry.mapTransactionId));
+        assertNull(info.transactions.getByMapTransId(1));
+        
+        Transaction t4 = Transaction.newBuilder()
+                .setKey(key1)
+                .setTransType(Transaction.TransactionType.DELETE)
+                .build();
+        
+        info.addTransaction(t4);
+        entry = info.transactions.getByKey(key1);
+        assertEquals(t4, entry.transaction);
+        assertEquals(4, entry.mapTransactionId);
+        assertEquals(entry, info.transactions.getByMapTransId(entry.mapTransactionId));
+        assertNull(info.transactions.getByMapTransId(3));
     }
 }

@@ -28,7 +28,7 @@ message DeRegister {
 message RequestKeyLock {
     string mapName = 1;
     bytes key = 2;
-    uint32 latestTransId = 3;
+    bytes value = 3;
     string uuid = 4;
 }
 
@@ -62,7 +62,6 @@ message ReleaseMapLock {
 }
 
 message Transaction {
-    uint32 keyTransactionId = 1;
     bytes key = 2;
     bytes value = 3;
     
@@ -118,5 +117,6 @@ message ServerToClientMessage {
         RequestMapLockResponse requestMapLockResponse = 2;
         ClientTransactionUpdate clientTransactionUpdate = 3;
         RequestMapChangeResponse requestMapChangeResponse = 4;
+        RegisterResponse registerResponse = 5; 
     }
 }

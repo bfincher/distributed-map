@@ -21,6 +21,7 @@ import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
 import com.fincher.iochannel.ChannelException;
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.SimpleStreamIo;
+import com.fincher.iochannel.tcp.TcpChannelIfc;
 import com.fincher.iochannel.tcp.TcpServerChannel;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -39,23 +40,26 @@ public class Server implements Closeable {
 
     private static final Logger LOG = LogManager.getLogger();
 
-    private final TcpServerChannel channel;
+    private final TcpChannelIfc channel;
 
-    private final Map<String, MapInfo> mapInfoMap = Collections.synchronizedMap(new HashMap<>());
+    protected final Map<String, MapInfo> mapInfoMap = Collections.synchronizedMap(new HashMap<>());
 
     public Server(int serverPort) {
         channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage, new SimpleStreamIo(false),
                 new InetSocketAddress(serverPort));
     }
 
+
     // for unit testing
-    Server(TcpServerChannel channel) {
+    Server(TcpChannelIfc channel) {
         this.channel = channel;
     }
+
 
     public void start() throws IOException, InterruptedException {
         channel.connect();
     }
+
 
     @Override
     public void close() throws IOException {
@@ -64,7 +68,8 @@ public class Server implements Closeable {
         }
     }
 
-    private void handleMessage(MessageBuffer mb) {
+
+    protected void handleMessage(MessageBuffer mb) {
         try {
             ClientToServerMessage wrapper = ClientToServerMessage.parseFrom(mb.getBytes());
             switch (wrapper.getMsgCase()) {
@@ -104,6 +109,7 @@ public class Server implements Closeable {
         }
     }
 
+
     private void handleRegister(Register reg, String channelId) throws ChannelException {
         String mapName = reg.getMapName();
         String keyType = reg.getKeyType();
@@ -117,15 +123,23 @@ public class Server implements Closeable {
                 try {
                     info.registerClient(reg.getUuid(), 0, channelId, keyType, valueType);
                     builder.setRegistrationSuccess(true);
+
+                    Utilities.sendMessage(channel, channelId,
+                            ServerToClientMessage.newBuilder().setRegisterResponse(builder.build()).build());
+
                     updateClient(mapName, channelId);
                 } catch (RegistrationFailureException e) {
                     builder.setRegistrationSuccess(false);
                     builder.setFailureReason(e.getMessage());
+                    Utilities.sendMessage(channel, channelId,
+                            ServerToClientMessage.newBuilder().setRegisterResponse(builder.build()).build());
                     LOG.warn(e.getMessage(), e);
                 }
+
             }
         }
     }
+
 
     private void handleDeRegister(DeRegister msg, String channelId) {
         MapInfo info = mapInfoMap.get(msg.getMapName());
@@ -135,6 +149,7 @@ public class Server implements Closeable {
             }
         }
     }
+
 
     private void handleRequestKeyLock(RequestKeyLock msg, String channelId) throws ChannelException {
         RequestKeyLockResponse.Builder response = RequestKeyLockResponse.newBuilder();
@@ -147,7 +162,11 @@ public class Server implements Closeable {
             response.setLockAcquired(false);
         } else {
             synchronized (info) {
-                if (msg.getLatestTransId() != info.getLatestKeyTransactionId(key)) {
+                Transaction oldValue = info.getTransactionWithKey(key);
+                if (oldValue != null
+                        && oldValue.getValue() != ByteString.EMPTY
+                        && !oldValue.getValue().equals(msg.getValue())) {
+
                     response.setLockAcquired(false);
                 } else {
                     response.setLockAcquired(info.acquireKeyLock(msg.getKey(), msg.getUuid()));
@@ -160,12 +179,14 @@ public class Server implements Closeable {
         Utilities.sendMessage(channel, channelId, wrapper);
     }
 
+
     private void handleReleaseKeyLock(ReleaseKeyLock msg) {
         MapInfo info = mapInfoMap.get(msg.getMapName());
         synchronized (info) {
             info.releaseKeyLock(msg.getKey(), msg.getUuid());
         }
     }
+
 
     private void handleRequestMapLock(RequestMapLock req, String channelId) throws ChannelException {
         RequestMapLockResponse.Builder response = RequestMapLockResponse.newBuilder();
@@ -185,6 +206,7 @@ public class Server implements Closeable {
         Utilities.sendMessage(channel, channelId, wrapper);
     }
 
+
     private void handleReleaseMapLock(ReleaseMapLock msg) {
         MapInfo info = mapInfoMap.get(msg.getMapName());
         if (info != null) {
@@ -193,6 +215,7 @@ public class Server implements Closeable {
             }
         }
     }
+
 
     private void handleRequestMapChange(RequestMapChange req, String channelId) throws ChannelException {
         String mapName = req.getMapName();
@@ -210,15 +233,11 @@ public class Server implements Closeable {
             response.setFailureReason(FailureReason.MAP_DOES_NOT_EXIST);
         } else {
             synchronized (info) {
-                if (info.getLatestKeyTransactionId(key) + 1 != transaction.getKeyTransactionId()) {
-                    response.setUpdateSuccess(false);
-                    response.setFailureReason(FailureReason.MAP_OUT_OF_DATE);
-                    updateClient(mapName, uuid);
-                } else if (info.hasMapLock(uuid)) {
+                if (info.hasMapLock(uuid)) {
                     info.addTransaction(transaction);
                     info.updateMapLock();
                     response.setUpdateSuccess(true);
-                } else if (info.hasKeyLock(transaction.getKey(), uuid)) {
+                } else if (info.hasKeyLock(key, uuid)) {
                     info.addTransaction(transaction);
                     info.updateMapLock();
                     response.setUpdateSuccess(true);
@@ -234,6 +253,7 @@ public class Server implements Closeable {
         Utilities.sendMessage(channel, channelId, wrapper);
     }
 
+
     private final void updateClient(String mapName, String channelId) throws ChannelException {
         MapInfo info = mapInfoMap.get(mapName);
         synchronized (info) {
@@ -242,7 +262,7 @@ public class Server implements Closeable {
                 ClientTransactionUpdate.Builder builder = ClientTransactionUpdate.newBuilder();
                 builder.setMapName(mapName);
                 builder.setMapTransactionId(info.getMapTransactionId());
-                builder.getTransactionsList().addAll(info.getTransactionsLargerThen(client.mapTransId));
+                builder.addAllTransactions(info.getTransactionsLargerThan(client.mapTransId));
 
                 ServerToClientMessage msg = ServerToClientMessage.newBuilder()
                         .setClientTransactionUpdate(builder.build()).build();

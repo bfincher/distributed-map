@@ -1,7 +1,6 @@
 package com.fincher.distributedmap.server;
 
 import com.fincher.distributedmap.Transaction;
-import com.fincher.distributedmap.server.MapInfo.TransactionMapEntry;
 import com.google.protobuf.ByteString;
 
 import java.time.Duration;
@@ -9,7 +8,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -78,7 +79,7 @@ class MapInfo {
         return mapTransactionId.get();
     }
 
-    Collection<Transaction> getTransactionsLargerThen(int transactionId) {
+    Collection<Transaction> getTransactionsLargerThan(int transactionId) {
         return transactions.byMapTransId.tailMap(transactionId, false).values().stream().map(t -> t.transaction)
                 .collect(Collectors.toUnmodifiableList());
     }
@@ -153,15 +154,10 @@ class MapInfo {
     }
 
     void addTransaction(Transaction transaction) {
-        int keyTransId = transaction.getKeyTransactionId();
         ByteString transKey = transaction.getKey();
 
-        TransactionMapEntry oldTransaction = transactions.getByKey(transKey);
-
-        int newKeyTransactionId = oldTransaction == null ? 0 : oldTransaction.transaction.getKeyTransactionId();
-
         TransactionMapEntry mapEntry = new TransactionMapEntry(
-                Transaction.newBuilder(transaction).setKeyTransactionId(newKeyTransactionId).build(),
+                transaction,
                 mapTransactionId.incrementAndGet());
         transactions.put(transKey, mapTransactionId.get(), mapEntry);
     }
@@ -197,10 +193,6 @@ class MapInfo {
         mapLock.timeLockAcquired = System.currentTimeMillis();
     }
 
-    int getLatestKeyTransactionId(ByteString key) {
-        return transactions.getByKey(key).transaction.getKeyTransactionId();
-    }
-
     String getMapName() {
         return mapName;
     }
@@ -213,7 +205,7 @@ class MapInfo {
         return valueType;
     }
 
-    class RegisteredClient {
+    static class RegisteredClient {
         final String uuid;
         int mapTransId;
         final String channelId;
@@ -223,6 +215,29 @@ class MapInfo {
             this.mapTransId = mapTransId;
             this.channelId = channelId;
         }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (obj == null) {
+                return false;
+            }
+            if (getClass() != obj.getClass()) {
+                return false;
+            }
+            RegisteredClient other = (RegisteredClient) obj;
+            return Objects.equals(channelId, other.channelId) && mapTransId == other.mapTransId
+                    && Objects.equals(uuid, other.uuid);
+        }
+
+    }
+    
+    Transaction getTransactionWithKey(ByteString key) {
+        TransactionMapEntry entry = transactions.getByKey(key);
+        
+        return entry == null ? null : entry.transaction;
     }
 
     static class Lock {
@@ -233,6 +248,25 @@ class MapInfo {
             this.uuid = uuid;
             timeLockAcquired = System.currentTimeMillis();
         }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj)
+                return true;
+            if (obj == null)
+                return false;
+            if (getClass() != obj.getClass())
+                return false;
+            Lock other = (Lock) obj;
+            if (timeLockAcquired != other.timeLockAcquired)
+                return false;
+            if (uuid == null) {
+                if (other.uuid != null)
+                    return false;
+            } else if (!uuid.equals(other.uuid))
+                return false;
+            return true;
+        }
     }
 
     static class TransactionMapEntry {
@@ -242,6 +276,25 @@ class MapInfo {
         TransactionMapEntry(Transaction transaction, int mapTransactionId) {
             this.transaction = transaction;
             this.mapTransactionId = mapTransactionId;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj)
+                return true;
+            if (obj == null)
+                return false;
+            if (getClass() != obj.getClass())
+                return false;
+            TransactionMapEntry other = (TransactionMapEntry) obj;
+            if (mapTransactionId != other.mapTransactionId)
+                return false;
+            if (transaction == null) {
+                if (other.transaction != null)
+                    return false;
+            } else if (!transaction.equals(other.transaction))
+                return false;
+            return true;
         }
     }
 
@@ -257,15 +310,39 @@ class MapInfo {
         TransactionMapEntry getByKey(ByteString key) {
             return byKey.get(key);
         }
-        
+
         void put(ByteString key, Integer mapTransactionId, TransactionMapEntry transaction) {
             byMapTransId.put(mapTransactionId, transaction);
             TransactionMapEntry prevEntry = byKey.put(key, transaction);
-            
+
             // we only want 1 transaction per key
             if (prevEntry != null) {
                 byMapTransId.remove(prevEntry.mapTransactionId);
             }
+        }
+    }
+
+    static class RegisteredClients {
+
+        final Map<String, RegisteredClient> byUuid = new ConcurrentHashMap<>();
+        final Map<String, RegisteredClient> byChannelId = new ConcurrentHashMap<>();
+
+        RegisteredClient getByUuid(String uuid) {
+            return byUuid.get(uuid);
+        }
+
+        RegisteredClient getByChannelId(String channelId) {
+            return byChannelId.get(channelId);
+        }
+
+        void put(String uuid, String channelId, RegisteredClient client) {
+            byUuid.put(uuid, client);
+            byChannelId.put(channelId, client);
+        }
+
+        void remove(String uuid, String channelId) {
+            byUuid.remove(uuid);
+            byChannelId.remove(channelId);
         }
     }
 }
