@@ -15,12 +15,10 @@ import com.fincher.distributedmap.RequestKeyLock;
 import com.fincher.distributedmap.RequestKeyLockResponse;
 import com.fincher.distributedmap.ServerToClientMessage;
 import com.fincher.distributedmap.Transaction;
-import com.fincher.distributedmap.server.MapInfo.Lock;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.TcpChannelIfc;
 import com.google.protobuf.ByteString;
-import com.google.protobuf.GeneratedMessageV3;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -192,22 +190,24 @@ public class ServerTest {
 
 
     @Test
-    public void testDeRegister() {
+    public void testDeRegister() throws InterruptedException {
         registerClient();
-
+        String uuid = TEST_UUID;
+        
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
-        info.mapLock = new MapInfo.Lock(TEST_UUID);
+        info.acquireMapLock(uuid);
 
         DeRegister dr = DeRegister.newBuilder().setMapName(TEST_MAP_NAME)
-                .setUuid(TEST_UUID).build();
+                .setUuid(uuid).build();
 
         ClientToServerMessage msg = ClientToServerMessage.newBuilder().setDeRegister(dr).build();
         MessageBuffer mb = new MessageBuffer(msg.toByteArray());
         mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
         server.handleMessage(mb);
 
-        assertNull(info.registeredClients.getByUuid(TEST_UUID));
-        assertNull(info.mapLock);
+        assertNull(info.registeredClients.getByUuid(uuid));
+        assertNull(info.registeredClients.getByChannelId(TEST_CHANNEL_ID));
+        assertFalse(info.hasMapLock(uuid));
     }
 
 
@@ -275,12 +275,12 @@ public class ServerTest {
     
     @Test
     public void testRequestKeyLockMapSomeoneElseHoldsMapLock() throws Exception {
+        String uuid = TEST_UUID;
         registerClient();
         responseMsgBuf.poll(); // discard register response
 
         // lock the map
-        server.mapInfoMap.get(TEST_MAP_NAME).mapLock = new MapInfo.Lock(TEST_UUID);
-
+        server.mapInfoMap.get(TEST_MAP_NAME).acquireMapLock(uuid);
         
         ByteString key = ByteString.copyFromUtf8("testKey");
         RequestKeyLock req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
@@ -300,13 +300,13 @@ public class ServerTest {
     }
     
     
-    public void testReleaseKeyLock() {
+    public void testReleaseKeyLock() throws InterruptedException {
         registerClient();
         responseMsgBuf.poll(); // discard register response
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         
         ByteString key = ByteString.copyFromUtf8("testKey");
-        info.keyLockMap.put(key, new MapInfo.Lock(TEST_UUID));
+        info.acquireKeyLock(key, TEST_UUID);
   
         ReleaseKeyLock req = ReleaseKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
                 .setUuid("uuid2")

@@ -3,7 +3,6 @@ package com.fincher.distributedmap.server;
 import com.fincher.distributedmap.Transaction;
 import com.google.protobuf.ByteString;
 
-import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -16,9 +15,6 @@ import java.util.stream.Collectors;
 
 class MapInfo {
 
-    static final Duration MAX_KEY_LOCK_TIME = Duration
-            .ofMillis(Integer.parseInt(System.getProperty("distributed.map.lock.timeout.millis", "1000")));
-
     final String mapName;
     final String keyType;
     final String valueType;
@@ -26,13 +22,14 @@ class MapInfo {
     protected final RegisteredClients registeredClients = new RegisteredClients();
     protected final Map<ByteString, Lock> keyLockMap = new HashMap<>();
     protected final Transactions transactions = new Transactions();
-    protected Lock mapLock = null;
+    protected Lock mapLock = new Lock();
 
     MapInfo(String mapName, String keyType, String valueType) {
         this.mapName = mapName;
         this.keyType = keyType;
         this.valueType = valueType;
     }
+
 
     void registerClient(String uuid, int mapTransId, String channelId, String regKeyType, String regValueType)
             throws RegistrationFailureException {
@@ -51,79 +48,84 @@ class MapInfo {
         registeredClients.put(uuid, channelId, entry);
     }
 
+
     void deRegisterClient(String uuid, String channelId) {
         registeredClients.remove(uuid, channelId);
 
         // delete any locks this client owns
         for (Iterator<Lock> it = keyLockMap.values().iterator(); it.hasNext();) {
             Lock entry = it.next();
-            if (entry.uuid.equals(uuid)) {
-                it.remove();
+            if (entry.isLockedBy(uuid)) {
+                entry.unlock(uuid);
             }
         }
 
-        if (mapLock != null && mapLock.uuid.equals(uuid)) {
-            mapLock = null;
+        if (mapLock.isLockedBy(uuid)) {
+            mapLock.unlock(uuid);
         }
     }
+
 
     RegisteredClient getClientByUuid(String uuid) {
         return registeredClients.getByUuid(uuid);
     }
 
+
     RegisteredClient getClientByChannelId(String channelId) {
         return registeredClients.getByChannelId(channelId);
     }
 
+
     int getMapTransactionId() {
         return mapTransactionId.get();
     }
+
 
     Collection<Transaction> getTransactionsLargerThan(int transactionId) {
         return transactions.byMapTransId.tailMap(transactionId, false).values().stream().map(t -> t.transaction)
                 .collect(Collectors.toUnmodifiableList());
     }
 
+
     boolean canAcquireKeyLock(ByteString key, String uuid) {
         if (!canAcquireMapLock(uuid)) {
             return false;
         }
 
-        Lock lock = keyLockMap.get(key);
-        if (lock != null) {
-            // only consider the age if this client does not already own the lock
-            if (!uuid.equals(lock.uuid)) {
-                return isLockOld(lock);
-            }
+        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        if (lock.isLocked()) {
+            return lock.isLockedBy(uuid);
         }
 
         return true;
     }
 
-    boolean acquireKeyLock(ByteString key, String uuid) {
+
+    boolean acquireKeyLock(ByteString key, String uuid) throws InterruptedException {
         if (!canAcquireKeyLock(key, uuid)) {
             return false;
         }
 
-        Lock lock = new Lock(uuid);
-        keyLockMap.put(key, lock);
+        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        lock.lock(uuid);
         return true;
     }
 
+
     boolean releaseKeyLock(ByteString key, String uuid) {
-        Lock lock = keyLockMap.get(key);
-        if (lock != null && lock.uuid.equals(uuid)) {
-            keyLockMap.remove(key);
-            return true;
-        }
-        return false;
+        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        return lock.unlock(uuid);
     }
 
+
     boolean canAcquireMapLock(String uuid) {
-        if (mapLock != null) {
-            if (isLockOld(mapLock)) {
-                mapLock = null;
-            } else if (!mapLock.uuid.equals(uuid)) {
+        // TODO retest
+        if (mapLock.isLocked()) {
+            return mapLock.isLockedBy(uuid);
+        }
+
+        for (Lock lock : keyLockMap.values()) {
+            if (lock.isLocked() && !lock.isLockedBy(uuid)) {
                 return false;
             }
         }
@@ -131,27 +133,25 @@ class MapInfo {
         return true;
     }
 
-    boolean acquireMapLock(String uuid) {
+
+    boolean acquireMapLock(String uuid) throws InterruptedException {
         if (canAcquireMapLock(uuid)) {
-            mapLock = new Lock(uuid);
+            mapLock.lock(uuid);
             return true;
         }
         return false;
     }
+
+
+    boolean isMapLocked() {
+        return mapLock.isLocked();
+    }
+
 
     boolean releaseMapLock(String uuid) {
-        if (mapLock != null && mapLock.uuid.equals(uuid)) {
-            mapLock = null;
-            return true;
-        }
-
-        return false;
+        return mapLock.unlock(uuid);
     }
 
-    static boolean isLockOld(Lock lock) {
-        Duration age = Duration.ofMillis(System.currentTimeMillis() - lock.timeLockAcquired);
-        return age.compareTo(MAX_KEY_LOCK_TIME) > 0;
-    }
 
     void addTransaction(Transaction transaction) {
         ByteString transKey = transaction.getKey();
@@ -162,44 +162,38 @@ class MapInfo {
         transactions.put(transKey, mapTransactionId.get(), mapEntry);
     }
 
+
     boolean hasMapLock(String uuid) {
-        if (mapLock != null) {
-            if (isLockOld(mapLock)) {
-                mapLock = null;
-                return false;
-            }
-
-            return mapLock.uuid.equals(uuid);
-        }
-
-        return false;
+        return mapLock.isLockedBy(uuid);
     }
+
 
     boolean hasKeyLock(ByteString key, String uuid) {
-        Lock lock = keyLockMap.get(key);
-        if (lock != null) {
-            if (isLockOld(lock)) {
-                keyLockMap.remove(key);
-                return false;
-            }
-
-            return lock.uuid.equals(uuid);
-        }
-
-        return false;
+        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        return lock.isLockedBy(uuid);
     }
 
-    void updateMapLock() {
-        mapLock.timeLockAcquired = System.currentTimeMillis();
+
+    void updateMapLock(String uuid) {
+        mapLock.updateTime(uuid);
     }
+
+
+    void updateKeyLock(ByteString key, String uuid) {
+        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        lock.updateTime(uuid);
+    }
+
 
     String getMapName() {
         return mapName;
     }
 
+
     String getKeyType() {
         return keyType;
     }
+
 
     String getValueType() {
         return valueType;
@@ -215,6 +209,7 @@ class MapInfo {
             this.mapTransId = mapTransId;
             this.channelId = channelId;
         }
+
 
         @Override
         public boolean equals(Object obj) {
@@ -233,40 +228,11 @@ class MapInfo {
         }
 
     }
-    
+
     Transaction getTransactionWithKey(ByteString key) {
         TransactionMapEntry entry = transactions.getByKey(key);
-        
+
         return entry == null ? null : entry.transaction;
-    }
-
-    static class Lock {
-        final String uuid;
-        long timeLockAcquired;
-
-        Lock(String uuid) {
-            this.uuid = uuid;
-            timeLockAcquired = System.currentTimeMillis();
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj)
-                return true;
-            if (obj == null)
-                return false;
-            if (getClass() != obj.getClass())
-                return false;
-            Lock other = (Lock) obj;
-            if (timeLockAcquired != other.timeLockAcquired)
-                return false;
-            if (uuid == null) {
-                if (other.uuid != null)
-                    return false;
-            } else if (!uuid.equals(other.uuid))
-                return false;
-            return true;
-        }
     }
 
     static class TransactionMapEntry {
@@ -277,6 +243,7 @@ class MapInfo {
             this.transaction = transaction;
             this.mapTransactionId = mapTransactionId;
         }
+
 
         @Override
         public boolean equals(Object obj) {
@@ -307,9 +274,11 @@ class MapInfo {
             return byMapTransId.get(mapTransId);
         }
 
+
         TransactionMapEntry getByKey(ByteString key) {
             return byKey.get(key);
         }
+
 
         void put(ByteString key, Integer mapTransactionId, TransactionMapEntry transaction) {
             byMapTransId.put(mapTransactionId, transaction);
@@ -331,14 +300,17 @@ class MapInfo {
             return byUuid.get(uuid);
         }
 
+
         RegisteredClient getByChannelId(String channelId) {
             return byChannelId.get(channelId);
         }
+
 
         void put(String uuid, String channelId, RegisteredClient client) {
             byUuid.put(uuid, client);
             byChannelId.put(channelId, client);
         }
+
 
         void remove(String uuid, String channelId) {
             byUuid.remove(uuid);

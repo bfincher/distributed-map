@@ -44,6 +44,10 @@ dependencies {
   testCompile 'org.awaitility:awaitility:4.0.1'
 }
 
+test {
+    forkEvery 1
+}
+
 protobuf {
   protoc {
     // The artifact spec for the Protobuf Compiler

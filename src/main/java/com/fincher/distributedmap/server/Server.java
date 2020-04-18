@@ -104,7 +104,7 @@ public class Server implements Closeable {
                 default:
                     throw new IllegalArgumentException("Unexpected message: " + wrapper.getMsgCase());
             }
-        } catch (InvalidProtocolBufferException | ChannelException e) {
+        } catch (InvalidProtocolBufferException | ChannelException | InterruptedException e) {
             LOG.error(e.getMessage(), e);
         }
     }
@@ -151,7 +151,8 @@ public class Server implements Closeable {
     }
 
 
-    private void handleRequestKeyLock(RequestKeyLock msg, String channelId) throws ChannelException {
+    private void handleRequestKeyLock(RequestKeyLock msg, String channelId)
+            throws ChannelException, InterruptedException {
         RequestKeyLockResponse.Builder response = RequestKeyLockResponse.newBuilder();
         ByteString key = msg.getKey();
         response.setMapName(msg.getMapName());
@@ -188,7 +189,8 @@ public class Server implements Closeable {
     }
 
 
-    private void handleRequestMapLock(RequestMapLock req, String channelId) throws ChannelException {
+    private void handleRequestMapLock(RequestMapLock req, String channelId)
+            throws ChannelException, InterruptedException {
         RequestMapLockResponse.Builder response = RequestMapLockResponse.newBuilder();
         response.setMapName(req.getMapName());
 
@@ -235,11 +237,11 @@ public class Server implements Closeable {
             synchronized (info) {
                 if (info.hasMapLock(uuid)) {
                     info.addTransaction(transaction);
-                    info.updateMapLock();
+                    info.updateMapLock(uuid);
                     response.setUpdateSuccess(true);
                 } else if (info.hasKeyLock(key, uuid)) {
                     info.addTransaction(transaction);
-                    info.updateMapLock();
+                    info.updateKeyLock(key, uuid);
                     response.setUpdateSuccess(true);
                 } else {
                     response.setUpdateSuccess(false);
