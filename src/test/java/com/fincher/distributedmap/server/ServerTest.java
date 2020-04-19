@@ -22,8 +22,11 @@ import com.google.protobuf.ByteString;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -38,6 +41,18 @@ public class ServerTest {
     private TcpChannelIfc channel;
     private Server server;
     private BlockingQueue<MessageBuffer> responseMsgBuf;
+
+    @BeforeClass
+    public static void beforeClass() {
+        System.setProperty("distributed.map.delete.empty.map.delay.millis", "500");
+    }
+
+
+    @AfterClass
+    public static void afterClass() {
+        System.clearProperty("distributed.map.delete.empty.map.delay.millis");
+    }
+
 
     @Before
     public void before() throws Exception {
@@ -136,7 +151,8 @@ public class ServerTest {
         server.handleMessage(mb);
 
         responseMsgBuf.poll(); // throw away the response from the first registration
-        RegisterResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes()).getRegisterResponse();
+        RegisterResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll(1, TimeUnit.SECONDS).getBytes())
+                .getRegisterResponse();
         assertFalse(resp.getRegistrationSuccess());
         assertEquals(
                 "A map exists for name testMapName with a value type of java.lang.Integer that did not match this registration's value type of java.lang.String",
@@ -193,7 +209,7 @@ public class ServerTest {
     public void testDeRegister() throws InterruptedException {
         registerClient();
         String uuid = TEST_UUID;
-        
+
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         info.acquireMapLock(uuid);
 
@@ -208,6 +224,22 @@ public class ServerTest {
         assertNull(info.registeredClients.getByUuid(uuid));
         assertNull(info.registeredClients.getByChannelId(TEST_CHANNEL_ID));
         assertFalse(info.hasMapLock(uuid));
+    }
+    
+    
+    @Test
+    public void testConnectionLost() throws InterruptedException {
+        registerClient(TEST_UUID, TEST_CHANNEL_ID);
+        
+        
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireMapLock(TEST_UUID);
+
+        server.connectionLost(TEST_CHANNEL_ID);
+        
+        assertNull(info.registeredClients.getByUuid(TEST_UUID));
+        assertNull(info.registeredClients.getByChannelId(TEST_CHANNEL_ID));
+        assertFalse(info.hasMapLock(TEST_UUID));
     }
 
 
@@ -271,8 +303,8 @@ public class ServerTest {
         assertFalse(resp.getLockAcquired());
         assertEquals(key, resp.getKey());
     }
-    
-    
+
+
     @Test
     public void testRequestKeyLockMapSomeoneElseHoldsMapLock() throws Exception {
         String uuid = TEST_UUID;
@@ -281,7 +313,7 @@ public class ServerTest {
 
         // lock the map
         server.mapInfoMap.get(TEST_MAP_NAME).acquireMapLock(uuid);
-        
+
         ByteString key = ByteString.copyFromUtf8("testKey");
         RequestKeyLock req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
                 .setUuid("uuid2")
@@ -293,23 +325,25 @@ public class ServerTest {
         mb.setReceivedFromIoChannelId("channelid2");
         server.handleMessage(mb);
 
-        RequestKeyLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes()).getRequestKeyLockResponse();
+        RequestKeyLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestKeyLockResponse();
         assertEquals(TEST_MAP_NAME, resp.getMapName());
         assertFalse(resp.getLockAcquired());
         assertEquals(key, resp.getKey());
     }
-    
-    
+
+
+    @Test
     public void testReleaseKeyLock() throws InterruptedException {
         registerClient();
         responseMsgBuf.poll(); // discard register response
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
-        
+
         ByteString key = ByteString.copyFromUtf8("testKey");
         info.acquireKeyLock(key, TEST_UUID);
-  
+
         ReleaseKeyLock req = ReleaseKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
-                .setUuid("uuid2")
+                .setUuid(TEST_UUID)
                 .setKey(key)
                 .build();
 
@@ -317,9 +351,7 @@ public class ServerTest {
         MessageBuffer mb = new MessageBuffer(msg.toByteArray());
         mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
         server.handleMessage(mb);
-        
-        assertNull(info.keyLockMap.get(key));
-
+        assertFalse(info.hasKeyLock(key, TEST_UUID));
     }
 
 

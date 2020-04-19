@@ -47,12 +47,15 @@ public class Server implements Closeable {
     public Server(int serverPort) {
         channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage, new SimpleStreamIo(false),
                 new InetSocketAddress(serverPort));
+
+        channel.addConnectionLostListener(this::connectionLost);
     }
 
 
     // for unit testing
     Server(TcpChannelIfc channel) {
         this.channel = channel;
+        channel.addConnectionLostListener(this::connectionLost);
     }
 
 
@@ -129,6 +132,20 @@ public class Server implements Closeable {
 
                     updateClient(mapName, channelId);
                 } catch (RegistrationFailureException e) {
+                    switch (e.getFailureReason()) {
+                        case KEY_TYPE_DOES_NOT_MATCH:
+                        case VALUE_TYPE_DOES_NOT_MATCH:
+                            if (info.getNumRegisteredClients() == 0) {
+                                // since there are no clientsfor this map, delete it and try again
+                                LOG.info("Deleting map {} with no registered clients", mapName);
+                                info.stop();
+                                mapInfoMap.remove(mapName);
+                                handleRegister(reg, channelId);
+                                return;
+                            }
+                            break;
+                    }
+
                     builder.setRegistrationSuccess(false);
                     builder.setFailureReason(e.getMessage());
                     Utilities.sendMessage(channel, channelId,
@@ -270,6 +287,21 @@ public class Server implements Closeable {
                         .setClientTransactionUpdate(builder.build()).build();
                 Utilities.sendMessage(channel, channelId, msg);
             }
+        }
+    }
+
+
+    protected void connectionLost(String channelId) {
+        synchronized (mapInfoMap) {
+            mapInfoMap.values().forEach(info -> {
+                synchronized (info) {
+                    RegisteredClient client = info.registeredClients.getByChannelId(channelId);
+                    LOG.info("Connection lost on channel ID {}.  De-registering client for map {}",
+                            channelId, info.mapName);
+
+                    info.deRegisterClient(client.uuid, channelId);
+                }
+            });
         }
     }
 

@@ -1,6 +1,7 @@
 package com.fincher.distributedmap.server;
 
 import com.fincher.distributedmap.Transaction;
+import com.fincher.distributedmap.server.RegistrationFailureException.RegistrationFailureReason;
 import com.google.protobuf.ByteString;
 
 import java.util.Collection;
@@ -29,6 +30,15 @@ class MapInfo {
         this.keyType = keyType;
         this.valueType = valueType;
     }
+    
+    
+    void stop() {
+        registeredClients.byChannelId.clear();
+        registeredClients.byUuid.clear();
+        keyLockMap.clear();
+        transactions.byKey.clear();
+        transactions.byMapTransId.clear();
+    }
 
 
     void registerClient(String uuid, int mapTransId, String channelId, String regKeyType, String regValueType)
@@ -36,12 +46,14 @@ class MapInfo {
 
         if (!regKeyType.equals(keyType)) {
             throw new RegistrationFailureException("A map exists for name " + mapName + " with a key type of " + keyType
-                    + " that did not match this registration's key type of " + regKeyType);
+                    + " that did not match this registration's key type of " + regKeyType,
+                    RegistrationFailureReason.KEY_TYPE_DOES_NOT_MATCH);
         }
 
         if (!regValueType.equals(valueType)) {
             throw new RegistrationFailureException("A map exists for name " + mapName + " with a value type of "
-                    + valueType + " that did not match this registration's value type of " + regValueType);
+                    + valueType + " that did not match this registration's value type of " + regValueType,
+                    RegistrationFailureReason.VALUE_TYPE_DOES_NOT_MATCH);
         }
 
         RegisteredClient entry = new RegisteredClient(uuid, mapTransId, channelId);
@@ -63,6 +75,11 @@ class MapInfo {
         if (mapLock.isLockedBy(uuid)) {
             mapLock.unlock(uuid);
         }
+    }
+    
+    
+    int getNumRegisteredClients() {
+        return registeredClients.byUuid.size();
     }
 
 
