@@ -30,8 +30,8 @@ class MapInfo {
         this.keyType = keyType;
         this.valueType = valueType;
     }
-    
-    
+
+
     void stop() {
         registeredClients.byChannelId.clear();
         registeredClients.byUuid.clear();
@@ -45,14 +45,16 @@ class MapInfo {
             throws RegistrationFailureException {
 
         if (!regKeyType.equals(keyType)) {
-            throw new RegistrationFailureException("A map exists for name " + mapName + " with a key type of " + keyType
-                    + " that did not match this registration's key type of " + regKeyType,
+            throw new RegistrationFailureException(
+                    "A map exists for name " + mapName + " with a key type of " + keyType
+                            + " that did not match this registration's key type of " + regKeyType,
                     RegistrationFailureReason.KEY_TYPE_DOES_NOT_MATCH);
         }
 
         if (!regValueType.equals(valueType)) {
-            throw new RegistrationFailureException("A map exists for name " + mapName + " with a value type of "
-                    + valueType + " that did not match this registration's value type of " + regValueType,
+            throw new RegistrationFailureException(
+                    "A map exists for name " + mapName + " with a value type of " + valueType
+                            + " that did not match this registration's value type of " + regValueType,
                     RegistrationFailureReason.VALUE_TYPE_DOES_NOT_MATCH);
         }
 
@@ -76,8 +78,8 @@ class MapInfo {
             mapLock.unlock(uuid);
         }
     }
-    
-    
+
+
     int getNumRegisteredClients() {
         return registeredClients.byUuid.size();
     }
@@ -173,9 +175,7 @@ class MapInfo {
     void addTransaction(Transaction transaction) {
         ByteString transKey = transaction.getKey();
 
-        TransactionMapEntry mapEntry = new TransactionMapEntry(
-                transaction,
-                mapTransactionId.incrementAndGet());
+        TransactionMapEntry mapEntry = new TransactionMapEntry(transaction, mapTransactionId.incrementAndGet());
         transactions.put(transKey, mapTransactionId.get(), mapEntry);
     }
 
@@ -264,20 +264,26 @@ class MapInfo {
 
         @Override
         public boolean equals(Object obj) {
-            if (this == obj)
+            if (this == obj) {
                 return true;
-            if (obj == null)
+            }
+            if (obj == null) {
                 return false;
-            if (getClass() != obj.getClass())
+            }
+            if (getClass() != obj.getClass()) {
                 return false;
+            }
             TransactionMapEntry other = (TransactionMapEntry) obj;
-            if (mapTransactionId != other.mapTransactionId)
+            if (mapTransactionId != other.mapTransactionId) {
                 return false;
+            }
             if (transaction == null) {
-                if (other.transaction != null)
+                if (other.transaction != null) {
                     return false;
-            } else if (!transaction.equals(other.transaction))
+                }
+            } else if (!transaction.equals(other.transaction)) {
                 return false;
+            }
             return true;
         }
     }

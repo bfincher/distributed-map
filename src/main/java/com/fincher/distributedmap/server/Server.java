@@ -36,6 +36,11 @@ import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+/** The server portion of the distributed map
+ * 
+ * @author Brian Fincher
+ *
+ */
 public class Server implements Closeable {
 
     private static final Logger LOG = LogManager.getLogger();
@@ -44,6 +49,10 @@ public class Server implements Closeable {
 
     protected final Map<String, MapInfo> mapInfoMap = Collections.synchronizedMap(new HashMap<>());
 
+    /** Constructs a new Server
+     * 
+     * @param serverPort The port on which this server will accept client connections
+     */
     public Server(int serverPort) {
         channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage, new SimpleStreamIo(false),
                 new InetSocketAddress(serverPort));
@@ -59,6 +68,11 @@ public class Server implements Closeable {
     }
 
 
+    /** Starts this server
+     * 
+     * @throws IOException If an exception occurs while starting the TCP server channel
+     * @throws InterruptedException If an exception occurs while starting the TCP server channel
+     */
     public void start() throws IOException, InterruptedException {
         channel.connect();
     }
