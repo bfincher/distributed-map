@@ -16,11 +16,11 @@ class Lock {
     private String uuid = null;
     private boolean isLocked = false;
     private Instant timeLockAcquired;
-    private final java.util.concurrent.locks.Lock lock = new ReentrantLock();
-    private final Condition unlockedCondition = lock.newCondition();
+    protected final java.util.concurrent.locks.Lock concurrentLock = new ReentrantLock();
+    private final Condition unlockedCondition = concurrentLock.newCondition();
 
     boolean isLocked() {
-        lock.lock();
+        concurrentLock.lock();
         try {
             if (isLocked) {
                 Duration age = Duration.between(timeLockAcquired, clock.instant());
@@ -31,7 +31,7 @@ class Lock {
             }
             return isLocked;
         } finally {
-            lock.unlock();
+            concurrentLock.unlock();
         }
     }
 
@@ -42,23 +42,23 @@ class Lock {
 
 
     void lock(String uuid) throws InterruptedException {
-        lock.lock();
+        concurrentLock.lock();
         try {
-            while (isLocked()) {
+            while (isLocked() && !isLockedBy(uuid)) {
                 unlockedCondition.await();
             }
             isLocked = true;
             timeLockAcquired = clock.instant();
             this.uuid = uuid;
         } finally {
-            lock.unlock();
+            concurrentLock.unlock();
         }
     }
 
 
     boolean lock(String uuid, Duration timeout) throws InterruptedException {
         Instant startTime = clock.instant();
-        if (lock.tryLock(timeout.toNanos(), TimeUnit.NANOSECONDS)) {
+        if (concurrentLock.tryLock(timeout.toNanos(), TimeUnit.NANOSECONDS)) {
             try {
                 long nanosToWait = timeout.minus(Duration.between(startTime, clock.instant())).toNanos();
                 while (isLocked()) {
@@ -73,7 +73,7 @@ class Lock {
                 this.uuid = uuid;
                 return true;
             } finally {
-                lock.unlock();
+                concurrentLock.unlock();
             }
         }
         return false;
@@ -81,7 +81,7 @@ class Lock {
 
 
     boolean unlock(String uuid) {
-        lock.lock();
+        concurrentLock.lock();
         try {
             if (isLocked() && this.uuid.equals(uuid)) {
                 isLocked = false;
@@ -91,12 +91,13 @@ class Lock {
             }
             return false;
         } finally {
-            lock.unlock();
+            concurrentLock.unlock();
         }
     }
-    
+
+
     boolean updateTime(String uuid) {
-        lock.lock();
+        concurrentLock.lock();
         try {
             if (isLockedBy(uuid)) {
                 timeLockAcquired = clock.instant();
@@ -104,13 +105,8 @@ class Lock {
             }
             return false;
         } finally {
-            lock.unlock();
+            concurrentLock.unlock();
         }
-    }
-    
-    
-    static void setTestClock(Clock clk) {
-        clock = clk;
     }
 
 }

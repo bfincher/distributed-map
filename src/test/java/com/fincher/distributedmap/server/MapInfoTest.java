@@ -6,12 +6,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.fincher.distributedmap.Transaction;
-import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
-import com.fincher.distributedmap.server.MapInfo.TransactionMapEntry;
-import com.google.common.base.Stopwatch;
-import com.google.protobuf.ByteString;
-
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -23,6 +17,13 @@ import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import com.fincher.distributedmap.messages.Transaction;
+import com.fincher.distributedmap.messages.Transaction.TransactionType;
+import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
+import com.fincher.distributedmap.server.MapInfo.TransactionMapEntry;
+import com.google.common.base.Stopwatch;
+import com.google.protobuf.ByteString;
 
 public class MapInfoTest {
 
@@ -141,11 +142,14 @@ public class MapInfoTest {
         String uuid3 = "uuid3";
         Duration d110 = Duration.ofMillis(110);
         ByteString testKey = ByteString.copyFrom(new String("testKey").getBytes());
+        
+        // test acquiring a lock when a lock entry does not exist
+        assertTrue(info.acquireKeyLock(testKey, uuid));
+        info.releaseKeyLock(testKey, uuid);
 
         info.acquireMapLock(uuid3);
         // should fail since someone else has a map lock
         assertFalse(info.acquireKeyLock(testKey, uuid));
-        assertNull(info.keyLockMap.get(testKey));
 
         // should pass now that the map lock has expired
         Awaitility.await().atMost(d110).until(() -> info.acquireKeyLock(testKey, uuid));
@@ -165,6 +169,10 @@ public class MapInfoTest {
     @Test
     public void testReleaseKeyLock() throws InterruptedException {
         ByteString key = ByteString.copyFromUtf8("testKey");
+        
+        // test releasing a lock for which no lock entry exists
+        assertFalse(info.releaseKeyLock(key, TEST_UUID));
+        
         Stopwatch sw = Stopwatch.createStarted();
         info.acquireKeyLock(key, TEST_UUID);
         assertTrue(info.hasKeyLock(key, TEST_UUID));
@@ -285,6 +293,93 @@ public class MapInfoTest {
         assertEquals(4, entry.mapTransactionId);
         assertEquals(entry, info.transactions.getByMapTransId(entry.mapTransactionId));
         assertNull(info.transactions.getByMapTransId(3));
+    }
+
+
+    @SuppressWarnings("unlikely-arg-type")
+    @Test
+    public void testTransactionMapEntryEquals() {
+
+        Transaction t1 = Transaction.newBuilder().setTransTypeValue(TransactionType.UPDATE_VALUE).build();
+        Transaction t2 = t1;
+
+        // test same pointer
+        TransactionMapEntry tme1 = new TransactionMapEntry(t1, 1);
+        TransactionMapEntry tme2 = tme1;
+        assertTrue(tme1.equals(tme2));
+
+        // test other is null
+        assertFalse(tme1.equals(null));
+
+        // test different class
+        assertFalse(tme1.equals("hello"));
+
+        // test different trans id
+        tme2 = new TransactionMapEntry(t1, 2);
+        assertFalse(tme1.equals(tme2));
+
+        // test different transaction
+        t2 = Transaction.newBuilder().setTransTypeValue(TransactionType.DELETE_VALUE).build();
+        tme2 = new TransactionMapEntry(t2, 1);
+        assertFalse(tme1.equals(tme2));
+
+        // test null transaction
+        tme1 = new TransactionMapEntry(null, 1);
+        assertFalse(tme1.equals(tme2));
+
+        // test is equal
+        tme1 = new TransactionMapEntry(t1, 1);
+        tme2 = new TransactionMapEntry(t1, 1);
+        assertTrue(tme1.equals(tme2));
+    }
+
+
+    @SuppressWarnings("unlikely-arg-type")
+    @Test
+    public void testRegisteredClientEquals() {
+        RegisteredClient rc1 = new RegisteredClient("uuid1", 1, "1");
+        RegisteredClient rc2 = rc1;
+
+        // test same pointer
+        assertTrue(rc1.equals(rc2));
+
+        // test other null
+        assertFalse(rc1.equals(null));
+
+        // test different class
+        assertFalse(rc1.equals("other"));
+
+        // test channel id not equals
+        rc2 = new RegisteredClient("uuid1", 1, "2");
+        assertFalse(rc1.equals(rc2));
+
+        // test tid not equals
+        rc2 = new RegisteredClient("uuid1", 2, "1");
+        assertFalse(rc1.equals(rc2));
+
+        // test uuid not equals
+        rc2 = new RegisteredClient("uuid2", 1, "1");
+        assertFalse(rc1.equals(rc2));
+
+        // test equals
+        rc2 = new RegisteredClient("uuid1", 1, "1");
+        assertTrue(rc1.equals(rc2));
+    }
+
+
+    @Test
+    public void testGetTransactionWithKey() {
+        MapInfo info = new MapInfo("mapName", "key", "value");
+        
+        ByteString key1 = ByteString.copyFromUtf8("key1");
+        ByteString key2 = ByteString.copyFromUtf8("key2");
+        
+        TransactionMapEntry tme = new TransactionMapEntry(Transaction.newBuilder().build(), 1);
+        
+        info.transactions.put(key1, 1, tme);
+        
+        assertEquals(tme.transaction, info.getTransactionWithKey(key1));
+        assertNull(info.getTransactionWithKey(key2));
     }
 
     static class TestClock extends Clock {

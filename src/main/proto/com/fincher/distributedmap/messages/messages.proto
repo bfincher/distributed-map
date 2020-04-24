@@ -1,6 +1,6 @@
 syntax = "proto3";
 option java_multiple_files = true;
-package com.fincher.distributedmap;
+package com.fincher.distributedmap.messages;
 
 message Register {
     string mapName = 1;
@@ -91,8 +91,8 @@ message RequestMapChangeResponse {
     bool updateSuccess = 3;
     
     enum FailureReason {
-        MAP_DOES_NOT_EXIST = 0;
-        MAP_OUT_OF_DATE = 1;
+        NO_STATEMENT = 0;
+        MAP_DOES_NOT_EXIST = 1;
         KEY_NOT_LOCKED = 2;
     }
     

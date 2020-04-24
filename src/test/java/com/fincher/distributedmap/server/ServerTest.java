@@ -2,22 +2,33 @@ package com.fincher.distributedmap.server;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-import com.fincher.distributedmap.ClientToServerMessage;
-import com.fincher.distributedmap.ClientTransactionUpdate;
-import com.fincher.distributedmap.DeRegister;
-import com.fincher.distributedmap.Register;
-import com.fincher.distributedmap.RegisterResponse;
-import com.fincher.distributedmap.ReleaseKeyLock;
-import com.fincher.distributedmap.RequestKeyLock;
-import com.fincher.distributedmap.RequestKeyLockResponse;
-import com.fincher.distributedmap.ServerToClientMessage;
-import com.fincher.distributedmap.Transaction;
+import com.fincher.distributedmap.messages.ClientToServerMessage;
+import com.fincher.distributedmap.messages.ClientTransactionUpdate;
+import com.fincher.distributedmap.messages.DeRegister;
+import com.fincher.distributedmap.messages.Register;
+import com.fincher.distributedmap.messages.RegisterResponse;
+import com.fincher.distributedmap.messages.ReleaseKeyLock;
+import com.fincher.distributedmap.messages.ReleaseMapLock;
+import com.fincher.distributedmap.messages.RequestKeyLock;
+import com.fincher.distributedmap.messages.RequestKeyLockResponse;
+import com.fincher.distributedmap.messages.RequestMapChange;
+import com.fincher.distributedmap.messages.RequestMapChangeResponse;
+import com.fincher.distributedmap.messages.RequestMapChangeResponse.FailureReason;
+import com.fincher.distributedmap.messages.RequestMapLock;
+import com.fincher.distributedmap.messages.RequestMapLockResponse;
+import com.fincher.distributedmap.messages.ServerToClientMessage;
+import com.fincher.distributedmap.messages.Transaction;
+import com.fincher.distributedmap.messages.Transaction.TransactionType;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
+
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.TcpChannelIfc;
+import com.fincher.iochannel.tcp.TcpServerChannel;
+
 import com.google.protobuf.ByteString;
 
 import java.util.concurrent.BlockingQueue;
@@ -72,6 +83,13 @@ public class ServerTest {
 
 
     @Test
+    public void testConstruct() {
+        server = new Server(123);
+        assertTrue(server.channel instanceof TcpServerChannel);
+    }
+
+
+    @Test
     public void testStart() throws Exception {
         server.start();
         Mockito.verify(channel, Mockito.times(1)).connect();
@@ -107,6 +125,42 @@ public class ServerTest {
         assertTrue(resp.getRegistrationSuccess());
         assertEquals("", resp.getFailureReason());
         assertEquals(TEST_MAP_NAME, resp.getMapName());
+    }
+
+
+    @Test
+    public void testRegisterInvalidKeyNoClients() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.deRegisterClient(TEST_UUID, TEST_CHANNEL_ID);
+
+        Register reg = Register.newBuilder()
+                .setUuid("uuid2")
+                .setMapName(TEST_MAP_NAME)
+                .setKeyType(TEST_VALUE_TYPE)
+                .setValueType(TEST_KEY_TYPE).build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRegister(reg).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId("channel2");
+        server.handleMessage(mb);
+
+        mb = responseMsgBuf.poll();
+        assertEquals("channel2", mb.getReceivedFromChannelId());
+
+        RegisterResponse resp = ServerToClientMessage.parseFrom(mb.getBytes()).getRegisterResponse();
+        assertTrue(resp.getRegistrationSuccess());
+        assertEquals("", resp.getFailureReason());
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+
+        info = server.mapInfoMap.get(TEST_MAP_NAME);
+        assertEquals(1, info.getNumRegisteredClients());
+        assertNotNull(info.registeredClients.getByUuid("uuid2"));
+        assertNotNull(info.registeredClients.getByChannelId("channel2"));
+        assertEquals(TEST_VALUE_TYPE, info.keyType);
+        assertEquals(TEST_KEY_TYPE, info.valueType);
     }
 
 
@@ -205,19 +259,39 @@ public class ServerTest {
     }
 
 
+    @Test(expected = IllegalArgumentException.class)
+    public void testUnexpectedMessage() {
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+    }
+
+
     @Test
     public void testDeRegister() throws InterruptedException {
+        // test dereg with no map
+        DeRegister dr = DeRegister.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid("uuid").build();
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setDeRegister(dr).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        assertNull(server.mapInfoMap.get("TEST_MAP_NAME"));
+
+        // now test dereg after register
         registerClient();
         String uuid = TEST_UUID;
 
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         info.acquireMapLock(uuid);
 
-        DeRegister dr = DeRegister.newBuilder().setMapName(TEST_MAP_NAME)
+        dr = DeRegister.newBuilder().setMapName(TEST_MAP_NAME)
                 .setUuid(uuid).build();
 
-        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setDeRegister(dr).build();
-        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        msg = ClientToServerMessage.newBuilder().setDeRegister(dr).build();
+        mb = new MessageBuffer(msg.toByteArray());
         mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
         server.handleMessage(mb);
 
@@ -225,18 +299,17 @@ public class ServerTest {
         assertNull(info.registeredClients.getByChannelId(TEST_CHANNEL_ID));
         assertFalse(info.hasMapLock(uuid));
     }
-    
-    
+
+
     @Test
     public void testConnectionLost() throws InterruptedException {
         registerClient(TEST_UUID, TEST_CHANNEL_ID);
-        
-        
+
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         info.acquireMapLock(TEST_UUID);
 
         server.connectionLost(TEST_CHANNEL_ID);
-        
+
         assertNull(info.registeredClients.getByUuid(TEST_UUID));
         assertNull(info.registeredClients.getByChannelId(TEST_CHANNEL_ID));
         assertFalse(info.hasMapLock(TEST_UUID));
@@ -331,6 +404,58 @@ public class ServerTest {
         assertFalse(resp.getLockAcquired());
         assertEquals(key, resp.getKey());
     }
+    
+    
+    @Test
+    public void testRequestKeyLockValuesNotEqual() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+        
+        ByteString key = ByteString.copyFromUtf8("key1");
+        ByteString value1 = ByteString.copyFromUtf8("value1");
+        ByteString value2 = ByteString.copyFromUtf8("value2");
+        
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        Transaction t = Transaction.newBuilder().setKey(key).setValue(value1).build();
+        
+        info.transactions.put(key, 1, new MapInfo.TransactionMapEntry(t, 1));
+        
+        RequestKeyLock req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid("uuid2")
+                .setKey(key)
+                .setValue(value2)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestKeyLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId("channelid2");
+        server.handleMessage(mb);
+
+        RequestKeyLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestKeyLockResponse();
+        
+        assertFalse(resp.getLockAcquired());
+        
+        // try again this time with an empty value in the transaction;
+        t = Transaction.newBuilder().setKey(key).setValue(ByteString.EMPTY).build();
+        info.transactions.put(key, 1, new MapInfo.TransactionMapEntry(t, 1));
+        
+        req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid("uuid2")
+                .setKey(key)
+                .setValue(value2)
+                .build();
+
+        msg = ClientToServerMessage.newBuilder().setRequestKeyLock(req).build();
+        mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId("channelid2");
+        server.handleMessage(mb);
+
+        resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestKeyLockResponse();
+        
+        assertTrue(resp.getLockAcquired());
+    }
 
 
     @Test
@@ -352,6 +477,235 @@ public class ServerTest {
         mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
         server.handleMessage(mb);
         assertFalse(info.hasKeyLock(key, TEST_UUID));
+    }
+
+
+    @Test
+    public void testHandleRequestMapChangeMapDoesNotExist() throws Exception {
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName("map that does not exist").build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals("map that does not exist", resp.getMapName());
+        assertFalse(resp.getUpdateSuccess());
+        assertEquals(FailureReason.MAP_DOES_NOT_EXIST, resp.getFailureReason());
+    }
+
+
+    @Test
+    public void testHandleRequestMapChangeNoLock() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME).build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+        assertFalse(resp.getUpdateSuccess());
+        assertEquals(FailureReason.KEY_NOT_LOCKED, resp.getFailureReason());
+    }
+
+
+    @Test
+    public void testHandleRequestMapChangeWithKeyLock() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        ByteString key = ByteString.copyFromUtf8("testKey");
+        ByteString value = ByteString.copyFromUtf8("testValue");
+        String uuid = TEST_UUID;
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireKeyLock(key, uuid);
+
+        Transaction t1 = Transaction.newBuilder().setKey(key)
+                .setValue(value)
+                .setTransType(TransactionType.UPDATE)
+                .build();
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(uuid)
+                .setTransaction(t1)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+        assertTrue(resp.getUpdateSuccess());
+        assertEquals(FailureReason.NO_STATEMENT, resp.getFailureReason());
+    }
+
+
+    @Test
+    public void testHandleRequestMapChangeWithMapLock() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        ByteString key = ByteString.copyFromUtf8("testKey");
+        ByteString value = ByteString.copyFromUtf8("testValue");
+        String uuid = TEST_UUID;
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireMapLock(uuid);
+
+        Transaction t1 = Transaction.newBuilder().setKey(key)
+                .setValue(value)
+                .setTransType(TransactionType.UPDATE)
+                .build();
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(uuid)
+                .setTransaction(t1)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+        assertTrue(resp.getUpdateSuccess());
+        assertEquals(FailureReason.NO_STATEMENT, resp.getFailureReason());
+    }
+
+
+    @Test
+    public void testRequestMapLock() throws Exception {
+        // test requesting a lock on a map that does not exist
+        RequestMapLock req = RequestMapLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapLockResponse();
+
+        assertFalse(resp.getLockAcquired());
+        
+        
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        req = RequestMapLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .build();
+
+        msg = ClientToServerMessage.newBuilder().setRequestMapLock(req).build();
+        mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapLockResponse();
+
+        assertTrue(resp.getLockAcquired());
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+    }
+
+
+    @Test
+    public void testRequestMapLockSomeOneElseHasMapLock() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireMapLock("uuid2");
+
+        RequestMapLock req = RequestMapLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapLockResponse();
+
+        assertFalse(resp.getLockAcquired());
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+    }
+
+
+    @Test
+    public void testRequestMapLockSomeOneElseHasKeyLock() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireKeyLock(ByteString.EMPTY, "uuid2");
+
+        RequestMapLock req = RequestMapLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapLockResponse();
+
+        assertFalse(resp.getLockAcquired());
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+    }
+
+
+    @Test
+    public void testReleaseMapLock() throws Exception {
+        // release the lock for a map that doesn't exist
+        ReleaseMapLock req = ReleaseMapLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setReleaseMapLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        assertNull(server.mapInfoMap.get(TEST_MAP_NAME));
+
+        registerClient();
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.mapLock.lock(TEST_UUID);
+        server.handleMessage(mb);
+        assertNotNull(server.mapInfoMap.get(TEST_MAP_NAME));
+        assertFalse(server.mapInfoMap.get(TEST_MAP_NAME).mapLock.isLockedBy(TEST_UUID));
+    }
+
+
+    @Test(expected = RuntimeException.class)
+    public void testHandleInvalidMessage() {
+        byte[] bytes = { 1, 2, 3 };
+        server.handleMessage(new MessageBuffer(bytes));
     }
 
 

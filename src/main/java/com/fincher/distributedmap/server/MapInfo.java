@@ -1,7 +1,7 @@
 package com.fincher.distributedmap.server;
 
-import com.fincher.distributedmap.Transaction;
-import com.fincher.distributedmap.server.RegistrationFailureException.RegistrationFailureReason;
+import com.fincher.distributedmap.messages.Transaction;
+
 import com.google.protobuf.ByteString;
 
 import java.util.Collection;
@@ -47,15 +47,13 @@ class MapInfo {
         if (!regKeyType.equals(keyType)) {
             throw new RegistrationFailureException(
                     "A map exists for name " + mapName + " with a key type of " + keyType
-                            + " that did not match this registration's key type of " + regKeyType,
-                    RegistrationFailureReason.KEY_TYPE_DOES_NOT_MATCH);
+                            + " that did not match this registration's key type of " + regKeyType);
         }
 
         if (!regValueType.equals(valueType)) {
             throw new RegistrationFailureException(
                     "A map exists for name " + mapName + " with a value type of " + valueType
-                            + " that did not match this registration's value type of " + regValueType,
-                    RegistrationFailureReason.VALUE_TYPE_DOES_NOT_MATCH);
+                            + " that did not match this registration's value type of " + regValueType);
         }
 
         RegisteredClient entry = new RegisteredClient(uuid, mapTransId, channelId);
@@ -125,7 +123,7 @@ class MapInfo {
             return false;
         }
 
-        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
+        Lock lock = keyLockMap.get(key);
         lock.lock(uuid);
         return true;
     }
@@ -138,7 +136,6 @@ class MapInfo {
 
 
     boolean canAcquireMapLock(String uuid) {
-        // TODO retest
         if (mapLock.isLocked()) {
             return mapLock.isLockedBy(uuid);
         }
@@ -193,12 +190,6 @@ class MapInfo {
 
     void updateMapLock(String uuid) {
         mapLock.updateTime(uuid);
-    }
-
-
-    void updateKeyLock(ByteString key, String uuid) {
-        Lock lock = keyLockMap.computeIfAbsent(key, k -> new Lock());
-        lock.updateTime(uuid);
     }
 
 

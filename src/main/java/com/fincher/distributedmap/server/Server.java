@@ -1,28 +1,30 @@
 package com.fincher.distributedmap.server;
 
-import com.fincher.distributedmap.ClientToServerMessage;
-import com.fincher.distributedmap.ClientTransactionUpdate;
-import com.fincher.distributedmap.DeRegister;
-import com.fincher.distributedmap.Register;
-import com.fincher.distributedmap.RegisterResponse;
-import com.fincher.distributedmap.ReleaseKeyLock;
-import com.fincher.distributedmap.ReleaseMapLock;
-import com.fincher.distributedmap.RequestKeyLock;
-import com.fincher.distributedmap.RequestKeyLockResponse;
-import com.fincher.distributedmap.RequestMapChange;
-import com.fincher.distributedmap.RequestMapChangeResponse;
-import com.fincher.distributedmap.RequestMapChangeResponse.FailureReason;
-import com.fincher.distributedmap.RequestMapLock;
-import com.fincher.distributedmap.RequestMapLockResponse;
-import com.fincher.distributedmap.ServerToClientMessage;
-import com.fincher.distributedmap.Transaction;
 import com.fincher.distributedmap.Utilities;
+import com.fincher.distributedmap.messages.ClientToServerMessage;
+import com.fincher.distributedmap.messages.ClientTransactionUpdate;
+import com.fincher.distributedmap.messages.DeRegister;
+import com.fincher.distributedmap.messages.Register;
+import com.fincher.distributedmap.messages.RegisterResponse;
+import com.fincher.distributedmap.messages.ReleaseKeyLock;
+import com.fincher.distributedmap.messages.ReleaseMapLock;
+import com.fincher.distributedmap.messages.RequestKeyLock;
+import com.fincher.distributedmap.messages.RequestKeyLockResponse;
+import com.fincher.distributedmap.messages.RequestMapChange;
+import com.fincher.distributedmap.messages.RequestMapChangeResponse;
+import com.fincher.distributedmap.messages.RequestMapChangeResponse.FailureReason;
+import com.fincher.distributedmap.messages.RequestMapLock;
+import com.fincher.distributedmap.messages.RequestMapLockResponse;
+import com.fincher.distributedmap.messages.ServerToClientMessage;
+import com.fincher.distributedmap.messages.Transaction;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
+
 import com.fincher.iochannel.ChannelException;
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.SimpleStreamIo;
 import com.fincher.iochannel.tcp.TcpChannelIfc;
 import com.fincher.iochannel.tcp.TcpServerChannel;
+
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 
@@ -36,7 +38,8 @@ import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-/** The server portion of the distributed map
+/**
+ * The server portion of the distributed map
  * 
  * @author Brian Fincher
  *
@@ -45,13 +48,15 @@ public class Server implements Closeable {
 
     private static final Logger LOG = LogManager.getLogger();
 
-    private final TcpChannelIfc channel;
+    protected final TcpChannelIfc channel;
 
     protected final Map<String, MapInfo> mapInfoMap = Collections.synchronizedMap(new HashMap<>());
 
-    /** Constructs a new Server
+    /**
+     * Constructs a new Server
      * 
-     * @param serverPort The port on which this server will accept client connections
+     * @param serverPort The port on which this server will accept client
+     *                   connections
      */
     public Server(int serverPort) {
         channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage, new SimpleStreamIo(false),
@@ -68,10 +73,13 @@ public class Server implements Closeable {
     }
 
 
-    /** Starts this server
+    /**
+     * Starts this server
      * 
-     * @throws IOException If an exception occurs while starting the TCP server channel
-     * @throws InterruptedException If an exception occurs while starting the TCP server channel
+     * @throws IOException          If an exception occurs while starting the TCP
+     *                              server channel
+     * @throws InterruptedException If an exception occurs while starting the TCP
+     *                              server channel
      */
     public void start() throws IOException, InterruptedException {
         channel.connect();
@@ -80,9 +88,7 @@ public class Server implements Closeable {
 
     @Override
     public void close() throws IOException {
-        if (channel != null) {
-            channel.close();
-        }
+        channel.close();
     }
 
 
@@ -90,39 +96,40 @@ public class Server implements Closeable {
         try {
             ClientToServerMessage wrapper = ClientToServerMessage.parseFrom(mb.getBytes());
             switch (wrapper.getMsgCase()) {
-                case REGISTER:
-                    handleRegister(wrapper.getRegister(), mb.getReceivedFromChannelId());
-                    break;
+            case REGISTER:
+                handleRegister(wrapper.getRegister(), mb.getReceivedFromChannelId());
+                break;
 
-                case DEREGISTER:
-                    handleDeRegister(wrapper.getDeRegister(), mb.getReceivedFromChannelId());
-                    break;
+            case DEREGISTER:
+                handleDeRegister(wrapper.getDeRegister(), mb.getReceivedFromChannelId());
+                break;
 
-                case REQUESTKEYLOCK:
-                    handleRequestKeyLock(wrapper.getRequestKeyLock(), mb.getReceivedFromChannelId());
-                    break;
+            case REQUESTKEYLOCK:
+                handleRequestKeyLock(wrapper.getRequestKeyLock(), mb.getReceivedFromChannelId());
+                break;
 
-                case RELEASEKEYLOCK:
-                    handleReleaseKeyLock(wrapper.getReleaseKeyLock());
-                    break;
+            case RELEASEKEYLOCK:
+                handleReleaseKeyLock(wrapper.getReleaseKeyLock());
+                break;
 
-                case REQUESTMAPLOCK:
-                    handleRequestMapLock(wrapper.getRequestMapLock(), mb.getReceivedFromChannelId());
-                    break;
+            case REQUESTMAPLOCK:
+                handleRequestMapLock(wrapper.getRequestMapLock(), mb.getReceivedFromChannelId());
+                break;
 
-                case RELEASEMAPLOCK:
-                    handleReleaseMapLock(wrapper.getReleaseMapLock());
-                    break;
+            case RELEASEMAPLOCK:
+                handleReleaseMapLock(wrapper.getReleaseMapLock());
+                break;
 
-                case REQUESTMAPCHANGE:
-                    handleRequestMapChange(wrapper.getRequestMapChange(), mb.getReceivedFromChannelId());
-                    break;
+            case REQUESTMAPCHANGE:
+                handleRequestMapChange(wrapper.getRequestMapChange(), mb.getReceivedFromChannelId());
+                break;
 
-                default:
-                    throw new IllegalArgumentException("Unexpected message: " + wrapper.getMsgCase());
+            default:
+                throw new IllegalArgumentException("Unexpected message: " + wrapper.getMsgCase());
             }
         } catch (InvalidProtocolBufferException | ChannelException | InterruptedException e) {
             LOG.error(e.getMessage(), e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -146,18 +153,13 @@ public class Server implements Closeable {
 
                     updateClient(mapName, channelId);
                 } catch (RegistrationFailureException e) {
-                    switch (e.getFailureReason()) {
-                        case KEY_TYPE_DOES_NOT_MATCH:
-                        case VALUE_TYPE_DOES_NOT_MATCH:
-                            if (info.getNumRegisteredClients() == 0) {
-                                // since there are no clientsfor this map, delete it and try again
-                                LOG.info("Deleting map {} with no registered clients", mapName);
-                                info.stop();
-                                mapInfoMap.remove(mapName);
-                                handleRegister(reg, channelId);
-                                return;
-                            }
-                            break;
+                    if (info.getNumRegisteredClients() == 0) {
+                        // since there are no clientsfor this map, delete it and try again
+                        LOG.info("Deleting map {} with no registered clients", mapName);
+                        info.stop();
+                        mapInfoMap.remove(mapName);
+                        handleRegister(reg, channelId);
+                        return;
                     }
 
                     builder.setRegistrationSuccess(false);
@@ -272,7 +274,7 @@ public class Server implements Closeable {
                     response.setUpdateSuccess(true);
                 } else if (info.hasKeyLock(key, uuid)) {
                     info.addTransaction(transaction);
-                    info.updateKeyLock(key, uuid);
+                    info.releaseKeyLock(key, uuid);
                     response.setUpdateSuccess(true);
                 } else {
                     response.setUpdateSuccess(false);
