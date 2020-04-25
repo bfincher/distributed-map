@@ -138,14 +138,18 @@ public class Server implements Closeable {
         String mapName = reg.getMapName();
         String keyType = reg.getKeyType();
         String valueType = reg.getValueType();
+        boolean isSynchronized = reg.getIsSynchronized();
+
         synchronized (mapInfoMap) {
-            MapInfo info = mapInfoMap.computeIfAbsent(mapName, key -> new MapInfo(mapName, keyType, valueType));
+            MapInfo info = mapInfoMap.computeIfAbsent(mapName,
+                key -> new MapInfo(mapName, keyType, valueType, isSynchronized));
+
             synchronized (info) {
                 RegisterResponse.Builder builder = RegisterResponse.newBuilder();
                 builder.setMapName(mapName);
 
                 try {
-                    info.registerClient(reg.getUuid(), 0, channelId, keyType, valueType);
+                    info.registerClient(reg.getUuid(), 0, channelId, keyType, valueType, isSynchronized);
                     builder.setRegistrationSuccess(true);
 
                     Utilities.sendMessage(channel, channelId,
@@ -270,11 +274,12 @@ public class Server implements Closeable {
             response.setFailureReason(FailureReason.MAP_DOES_NOT_EXIST);
         } else {
             synchronized (info) {
-
                 RegisteredClient rc = info.getClientByUuid(uuid);
                 if (rc == null) {
                     response.setUpdateSuccess(false);
                     response.setFailureReason(FailureReason.CLIENT_NOT_REGISTERED);
+                } else if (!info.isSynchronized) {
+                    response.setUpdateSuccess(true);
                 } else if (info.hasMapLock(uuid)) {
                     info.updateMapLock(uuid);
                     response.setUpdateSuccess(true);

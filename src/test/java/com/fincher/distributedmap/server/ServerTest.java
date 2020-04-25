@@ -243,7 +243,7 @@ public class ServerTest {
 
         info.addTransaction(t2);
 
-        registerClient("uuid2", "channelid2");
+        registerClient("uuid2", "channelid2", true);
 
         responseMsgBuf.poll(); // throw away the response from the first registration
         RegisterResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes()).getRegisterResponse();
@@ -305,7 +305,7 @@ public class ServerTest {
 
     @Test
     public void testConnectionLost() throws InterruptedException {
-        registerClient(TEST_UUID, TEST_CHANNEL_ID);
+        registerClient(TEST_UUID, TEST_CHANNEL_ID, true);
 
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         info.acquireMapLock(TEST_UUID);
@@ -458,6 +458,37 @@ public class ServerTest {
 
         assertTrue(resp.getLockAcquired());
     }
+    
+    
+    @Test
+    public void testRequestKeyLockSuccess() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        ByteString key = ByteString.copyFromUtf8("key1");
+        ByteString value = ByteString.copyFromUtf8("value1");
+
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        Transaction t = Transaction.newBuilder().setKey(key).setValue(value).build();
+
+        info.transactions.put(key, 1, new MapInfo.TransactionMapEntry(t, 1));
+
+        RequestKeyLock req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid("uuid2")
+                .setKey(key)
+                .setValue(value)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestKeyLock(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId("channelid2");
+        server.handleMessage(mb);
+
+        RequestKeyLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestKeyLockResponse();
+
+        assertTrue(resp.getLockAcquired());
+    }
 
 
     @Test
@@ -576,6 +607,39 @@ public class ServerTest {
         assertTrue(resp.getUpdateSuccess());
         assertEquals(FailureReason.NO_STATEMENT, resp.getFailureReason());
     }
+    
+    
+    @Test
+    public void testHandleRequestMapChangeNotSynchronized() throws Exception {
+        registerClient(TEST_UUID, TEST_CHANNEL_ID, false);
+        responseMsgBuf.poll(); // discard register response
+
+        ByteString key = ByteString.copyFromUtf8("testKey");
+        ByteString value = ByteString.copyFromUtf8("testValue");
+        String uuid = TEST_UUID;
+
+        Transaction t1 = Transaction.newBuilder().setKey(key)
+                .setValue(value)
+                .setTransType(TransactionType.UPDATE)
+                .build();
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(uuid)
+                .setTransaction(t1)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+        assertTrue(resp.getUpdateSuccess());
+        assertEquals(FailureReason.NO_STATEMENT, resp.getFailureReason());
+    }
 
 
     @Test
@@ -583,10 +647,10 @@ public class ServerTest {
         registerClient();
         responseMsgBuf.poll(); // discard register response
 
-        registerClient("2", "2");
+        registerClient("2", "2", true);
         responseMsgBuf.poll(); // discard register response
 
-        registerClient("3", "3");
+        registerClient("3", "3", true);
         responseMsgBuf.poll(); // discard register response
 
         ByteString key = ByteString.copyFromUtf8("testKey");
@@ -801,16 +865,17 @@ public class ServerTest {
 
 
     private void registerClient() {
-        registerClient(TEST_UUID, TEST_CHANNEL_ID);
+        registerClient(TEST_UUID, TEST_CHANNEL_ID, true);
     }
 
 
-    private void registerClient(String uuid, String channelId) {
+    private void registerClient(String uuid, String channelId, boolean isSynchronized) {
         Register reg = Register.newBuilder()
                 .setMapName(TEST_MAP_NAME)
                 .setKeyType(TEST_KEY_TYPE)
                 .setValueType(TEST_VALUE_TYPE)
                 .setUuid(uuid)
+                .setIsSynchronized(isSynchronized)
                 .build();
 
         ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRegister(reg).build();

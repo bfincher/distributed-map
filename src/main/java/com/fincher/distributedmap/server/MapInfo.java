@@ -20,29 +20,46 @@ class MapInfo {
     final String mapName;
     final String keyType;
     final String valueType;
+    final boolean isSynchronized;
     private final AtomicInteger mapTransactionId = new AtomicInteger(0);
     protected final RegisteredClients registeredClients = new RegisteredClients();
-    protected final Map<ByteString, Lock> keyLockMap = new HashMap<>();
+    protected final Map<ByteString, Lock> keyLockMap;
     protected final Transactions transactions = new Transactions();
-    protected Lock mapLock = new Lock();
+    protected final Lock mapLock;
 
-    MapInfo(String mapName, String keyType, String valueType) {
+    MapInfo(String mapName, String keyType, String valueType, boolean isSynchronized) {
         this.mapName = mapName;
         this.keyType = keyType;
         this.valueType = valueType;
+        this.isSynchronized = isSynchronized;
+
+        if (isSynchronized) {
+            keyLockMap = new HashMap<>();
+            mapLock = new Lock();
+        } else {
+            keyLockMap = null;
+            mapLock = null;
+        }
     }
 
 
     void stop() {
         registeredClients.byChannelId.clear();
         registeredClients.byUuid.clear();
-        keyLockMap.clear();
         transactions.byKey.clear();
         transactions.byMapTransId.clear();
+
+        if (keyLockMap != null) {
+            keyLockMap.clear();
+        }
     }
 
 
-    void registerClient(String uuid, int mapTransId, String channelId, String regKeyType, String regValueType)
+    void registerClient(String uuid, int mapTransId,
+            String channelId,
+            String regKeyType,
+            String regValueType,
+            boolean regIsSynchronized)
             throws RegistrationFailureException {
 
         if (!regKeyType.equals(keyType)) {
@@ -57,6 +74,13 @@ class MapInfo {
                             + " that did not match this registration's value type of " + regValueType);
         }
 
+        if (regIsSynchronized != isSynchronized) {
+            throw new RegistrationFailureException(
+                    "A map exists for name " + mapName + " with a synchronization setting of " + isSynchronized
+                            + " that did not match this registration's synchronization setting of "
+                            + regIsSynchronized);
+        }
+
         RegisteredClient entry = new RegisteredClient(uuid, mapTransId, channelId);
         registeredClients.put(uuid, channelId, entry);
     }
@@ -65,16 +89,18 @@ class MapInfo {
     void deRegisterClient(String uuid, String channelId) {
         registeredClients.remove(uuid, channelId);
 
-        // delete any locks this client owns
-        for (Iterator<Lock> it = keyLockMap.values().iterator(); it.hasNext();) {
-            Lock entry = it.next();
-            if (entry.isLockedBy(uuid)) {
-                entry.unlock(uuid);
+        if (isSynchronized) {
+            // delete any locks this client owns
+            for (Iterator<Lock> it = keyLockMap.values().iterator(); it.hasNext();) {
+                Lock entry = it.next();
+                if (entry.isLockedBy(uuid)) {
+                    entry.unlock(uuid);
+                }
             }
-        }
 
-        if (mapLock.isLockedBy(uuid)) {
-            mapLock.unlock(uuid);
+            if (mapLock.isLockedBy(uuid)) {
+                mapLock.unlock(uuid);
+            }
         }
     }
 

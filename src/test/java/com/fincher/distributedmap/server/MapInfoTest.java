@@ -49,8 +49,8 @@ public class MapInfoTest {
 
     @Before
     public void before() throws Exception {
-        info = new MapInfo(TEST_MAP_NAME, TEST_KEY_TYPE, TEST_VALUE_TYPE);
-        info.registerClient(TEST_UUID, 1, TEST_CHANNEL_ID, TEST_KEY_TYPE, TEST_VALUE_TYPE);
+        info = new MapInfo(TEST_MAP_NAME, TEST_KEY_TYPE, TEST_VALUE_TYPE, true);
+        info.registerClient(TEST_UUID, 1, TEST_CHANNEL_ID, TEST_KEY_TYPE, TEST_VALUE_TYPE, true);
     }
 
 
@@ -73,7 +73,7 @@ public class MapInfoTest {
 
         // test with invalid key type
         try {
-            info.registerClient("uuid2", 0, "testChannelId2", "java.lang.Long", TEST_VALUE_TYPE);
+            info.registerClient("uuid2", 0, "testChannelId2", "java.lang.Long", TEST_VALUE_TYPE, true);
             fail("Expected an exception");
         } catch (RegistrationFailureException e) {
             String expectedMsg = "A map exists for name testMapName with a key type of java.lang.String"
@@ -83,11 +83,21 @@ public class MapInfoTest {
 
         // test with invalid value type
         try {
-            info.registerClient("uuid3", 0, "testChannelId3", TEST_KEY_TYPE, "java.lang.Long");
+            info.registerClient("uuid3", 0, "testChannelId3", TEST_KEY_TYPE, "java.lang.Long", true);
             fail("Expected an exception");
         } catch (RegistrationFailureException e) {
             String expectedMsg = "A map exists for name testMapName with a value type of java.lang.Integer"
                     + " that did not match this registration's value type of java.lang.Long";
+            assertEquals(expectedMsg, e.getMessage());
+        }
+        
+        // test with invalid synch setting
+        try {
+            info.registerClient("uuid3", 0, "testChannelId3", TEST_KEY_TYPE, TEST_VALUE_TYPE, false);
+            fail("Expected an exception");
+        } catch (RegistrationFailureException e) {
+            String expectedMsg = "A map exists for name testMapName with a synchronization setting of true"
+                    + " that did not match this registration's synchronization setting of false";
             assertEquals(expectedMsg, e.getMessage());
         }
 
@@ -369,7 +379,7 @@ public class MapInfoTest {
 
     @Test
     public void testGetTransactionWithKey() {
-        MapInfo info = new MapInfo("mapName", "key", "value");
+        MapInfo info = new MapInfo("mapName", "key", "value", true);
         
         ByteString key1 = ByteString.copyFromUtf8("key1");
         ByteString key2 = ByteString.copyFromUtf8("key2");
