@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.fincher.distributedmap.messages.ClientToServerMessage;
 import com.fincher.distributedmap.messages.ClientTransactionUpdate;
@@ -31,6 +32,7 @@ import com.fincher.iochannel.tcp.TcpServerChannel;
 
 import com.google.protobuf.ByteString;
 
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -404,22 +406,22 @@ public class ServerTest {
         assertFalse(resp.getLockAcquired());
         assertEquals(key, resp.getKey());
     }
-    
-    
+
+
     @Test
     public void testRequestKeyLockValuesNotEqual() throws Exception {
         registerClient();
         responseMsgBuf.poll(); // discard register response
-        
+
         ByteString key = ByteString.copyFromUtf8("key1");
         ByteString value1 = ByteString.copyFromUtf8("value1");
         ByteString value2 = ByteString.copyFromUtf8("value2");
-        
+
         MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
         Transaction t = Transaction.newBuilder().setKey(key).setValue(value1).build();
-        
+
         info.transactions.put(key, 1, new MapInfo.TransactionMapEntry(t, 1));
-        
+
         RequestKeyLock req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
                 .setUuid("uuid2")
                 .setKey(key)
@@ -433,13 +435,13 @@ public class ServerTest {
 
         RequestKeyLockResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
                 .getRequestKeyLockResponse();
-        
+
         assertFalse(resp.getLockAcquired());
-        
+
         // try again this time with an empty value in the transaction;
         t = Transaction.newBuilder().setKey(key).setValue(ByteString.EMPTY).build();
         info.transactions.put(key, 1, new MapInfo.TransactionMapEntry(t, 1));
-        
+
         req = RequestKeyLock.newBuilder().setMapName(TEST_MAP_NAME)
                 .setUuid("uuid2")
                 .setKey(key)
@@ -453,7 +455,7 @@ public class ServerTest {
 
         resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
                 .getRequestKeyLockResponse();
-        
+
         assertTrue(resp.getLockAcquired());
     }
 
@@ -503,7 +505,7 @@ public class ServerTest {
         registerClient();
         responseMsgBuf.poll(); // discard register response
 
-        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME).build();
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME).setUuid(TEST_UUID).build();
 
         ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
         MessageBuffer mb = new MessageBuffer(msg.toByteArray());
@@ -516,6 +518,27 @@ public class ServerTest {
         assertEquals(TEST_MAP_NAME, resp.getMapName());
         assertFalse(resp.getUpdateSuccess());
         assertEquals(FailureReason.KEY_NOT_LOCKED, resp.getFailureReason());
+    }
+    
+    
+    @Test
+    public void testHandleRequestMapChangeNotRegistered() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME).setUuid("2").build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getRequestMapChangeResponse();
+
+        assertEquals(TEST_MAP_NAME, resp.getMapName());
+        assertFalse(resp.getUpdateSuccess());
+        assertEquals(FailureReason.CLIENT_NOT_REGISTERED, resp.getFailureReason());
     }
 
 
@@ -556,6 +579,74 @@ public class ServerTest {
 
 
     @Test
+    public void testMapChangeWithOtherClients() throws Exception {
+        registerClient();
+        responseMsgBuf.poll(); // discard register response
+
+        registerClient("2", "2");
+        responseMsgBuf.poll(); // discard register response
+
+        registerClient("3", "3");
+        responseMsgBuf.poll(); // discard register response
+
+        ByteString key = ByteString.copyFromUtf8("testKey");
+        ByteString value = ByteString.copyFromUtf8("testValue");
+        
+        MapInfo info = server.mapInfoMap.get(TEST_MAP_NAME);
+        info.acquireKeyLock(key, TEST_UUID);
+
+        Transaction t1 = Transaction.newBuilder().setKey(key)
+                .setValue(value)
+                .setTransType(TransactionType.UPDATE)
+                .build();
+
+        RequestMapChange req = RequestMapChange.newBuilder().setMapName(TEST_MAP_NAME)
+                .setUuid(TEST_UUID)
+                .setTransaction(t1)
+                .build();
+
+        ClientToServerMessage msg = ClientToServerMessage.newBuilder().setRequestMapChange(req).build();
+        MessageBuffer mb = new MessageBuffer(msg.toByteArray());
+        mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
+        server.handleMessage(mb);
+
+        boolean foundResponse = false;
+        int numClientUpdatesReceived = 0;
+
+        while ((mb = responseMsgBuf.poll(1, TimeUnit.SECONDS)) != null) {
+            
+            ServerToClientMessage resp = ServerToClientMessage.parseFrom(mb.getBytes());
+            
+            switch (resp.getMsgCase()) {
+            case CLIENTTRANSACTIONUPDATE:
+                ClientTransactionUpdate ctu = resp.getClientTransactionUpdate();
+                assertEquals(TEST_MAP_NAME, ctu.getMapName());
+                assertEquals(1, ctu.getMapTransactionId());
+                
+                List<Transaction> transList = ctu.getTransactionsList();
+                assertEquals(1, transList.size());
+                
+                assertEquals(t1, transList.get(0));
+                
+                numClientUpdatesReceived++;
+                break;
+
+            case REQUESTMAPCHANGERESPONSE:
+                assertTrue(resp.getRequestMapChangeResponse().getUpdateSuccess());
+                foundResponse = true;
+                break;
+
+            default:
+                fail("Unexpected response received " + resp.getMsgCase());
+            }
+        }
+
+        assertTrue(foundResponse);
+        assertEquals(2, numClientUpdatesReceived);
+    }
+
+
+    @Test
     public void testHandleRequestMapChangeWithMapLock() throws Exception {
         registerClient();
         responseMsgBuf.poll(); // discard register response
@@ -582,12 +673,13 @@ public class ServerTest {
         mb.setReceivedFromIoChannelId(TEST_CHANNEL_ID);
         server.handleMessage(mb);
 
-        RequestMapChangeResponse resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
-                .getRequestMapChangeResponse();
-
-        assertEquals(TEST_MAP_NAME, resp.getMapName());
-        assertTrue(resp.getUpdateSuccess());
-        assertEquals(FailureReason.NO_STATEMENT, resp.getFailureReason());
+        ServerToClientMessage resp = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes());
+        System.out.println(resp.getMsgCase());
+        RequestMapChangeResponse rmcr = resp.getRequestMapChangeResponse();
+        System.out.println(resp);
+        assertEquals(TEST_MAP_NAME, rmcr.getMapName());
+        assertTrue(rmcr.getUpdateSuccess());
+        assertEquals(FailureReason.NO_STATEMENT, rmcr.getFailureReason());
     }
 
 
@@ -607,8 +699,7 @@ public class ServerTest {
                 .getRequestMapLockResponse();
 
         assertFalse(resp.getLockAcquired());
-        
-        
+
         registerClient();
         responseMsgBuf.poll(); // discard register response
 

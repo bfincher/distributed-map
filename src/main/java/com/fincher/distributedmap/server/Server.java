@@ -258,6 +258,8 @@ public class Server implements Closeable {
         ByteString key = transaction.getKey();
         String uuid = req.getUuid();
 
+        LOG.debug("handling a request for map change for map {} from uuid {}", mapName, uuid);
+
         RequestMapChangeResponse.Builder response = RequestMapChangeResponse.newBuilder();
         response.setMapName(mapName);
         response.setTransaction(transaction);
@@ -268,17 +270,27 @@ public class Server implements Closeable {
             response.setFailureReason(FailureReason.MAP_DOES_NOT_EXIST);
         } else {
             synchronized (info) {
-                if (info.hasMapLock(uuid)) {
-                    info.addTransaction(transaction);
+
+                RegisteredClient rc = info.getClientByUuid(uuid);
+                if (rc == null) {
+                    response.setUpdateSuccess(false);
+                    response.setFailureReason(FailureReason.CLIENT_NOT_REGISTERED);
+                } else if (info.hasMapLock(uuid)) {
                     info.updateMapLock(uuid);
                     response.setUpdateSuccess(true);
                 } else if (info.hasKeyLock(key, uuid)) {
-                    info.addTransaction(transaction);
                     info.releaseKeyLock(key, uuid);
                     response.setUpdateSuccess(true);
                 } else {
                     response.setUpdateSuccess(false);
                     response.setFailureReason(FailureReason.KEY_NOT_LOCKED);
+                }
+
+                if (response.getUpdateSuccess()) {
+                    info.addTransaction(transaction);
+
+                    rc.mapTransId = info.getMapTransactionId();
+                    updateClients(mapName);
                 }
             }
         }
@@ -289,19 +301,37 @@ public class Server implements Closeable {
     }
 
 
+    private void updateClients(String mapName) throws ChannelException {
+        MapInfo info = mapInfoMap.get(mapName);
+        synchronized (info) {
+            for (RegisteredClient client : info.getAllRegisteredClients()) {
+                updateClient(mapName, client.channelId);
+            }
+        }
+    }
+
+
     private final void updateClient(String mapName, String channelId) throws ChannelException {
         MapInfo info = mapInfoMap.get(mapName);
         synchronized (info) {
             RegisteredClient client = info.getClientByChannelId(channelId);
-            if (client.mapTransId != info.getMapTransactionId()) {
+            updateClient(info, client);
+        }
+    }
+
+
+    private final void updateClient(MapInfo mapInfo, RegisteredClient client) throws ChannelException {
+        synchronized (mapInfo) {
+            if (client.mapTransId != mapInfo.getMapTransactionId()) {
                 ClientTransactionUpdate.Builder builder = ClientTransactionUpdate.newBuilder();
-                builder.setMapName(mapName);
-                builder.setMapTransactionId(info.getMapTransactionId());
-                builder.addAllTransactions(info.getTransactionsLargerThan(client.mapTransId));
+                builder.setMapName(mapInfo.mapName);
+                builder.setMapTransactionId(mapInfo.getMapTransactionId());
+                builder.addAllTransactions(mapInfo.getTransactionsLargerThan(client.mapTransId));
 
                 ServerToClientMessage msg = ServerToClientMessage.newBuilder()
                         .setClientTransactionUpdate(builder.build()).build();
-                Utilities.sendMessage(channel, channelId, msg);
+                Utilities.sendMessage(channel, client.channelId, msg);
+                client.mapTransId = mapInfo.getMapTransactionId();
             }
         }
     }

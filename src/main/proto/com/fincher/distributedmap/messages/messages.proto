@@ -8,6 +8,7 @@ message Register {
     string valueType = 3;
     uint32 lastMapTransId = 4;
     string uuid = 5;
+    bool isSynchronized = 6;
 }
 
 
@@ -94,6 +95,7 @@ message RequestMapChangeResponse {
         NO_STATEMENT = 0;
         MAP_DOES_NOT_EXIST = 1;
         KEY_NOT_LOCKED = 2;
+        CLIENT_NOT_REGISTERED = 3;
     }
     
     FailureReason failureReason = 4;

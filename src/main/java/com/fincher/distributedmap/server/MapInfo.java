@@ -7,6 +7,7 @@ import com.google.protobuf.ByteString;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
@@ -93,12 +94,17 @@ class MapInfo {
     }
 
 
+    Collection<RegisteredClient> getAllRegisteredClients() {
+        return registeredClients.byChannelId.values();
+    }
+
+
     int getMapTransactionId() {
         return mapTransactionId.get();
     }
 
 
-    Collection<Transaction> getTransactionsLargerThan(int transactionId) {
+    List<Transaction> getTransactionsLargerThan(int transactionId) {
         return transactions.byMapTransId.tailMap(transactionId, false).values().stream().map(t -> t.transaction)
                 .collect(Collectors.toUnmodifiableList());
     }
