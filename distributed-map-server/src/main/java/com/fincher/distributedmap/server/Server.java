@@ -59,7 +59,8 @@ public class Server implements Closeable {
      *                   connections
      */
     public Server(int serverPort) {
-        channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage, new SimpleStreamIo(false),
+        channel = TcpServerChannel.createChannel("DistributedMapServer", this::handleMessage,
+                new SimpleStreamIo(false),
                 new InetSocketAddress(serverPort));
 
         channel.addConnectionLostListener(this::connectionLost);
@@ -68,8 +69,8 @@ public class Server implements Closeable {
 
     // for unit testing
     Server(TcpChannelIfc channel) {
-        this.channel = channel;
         channel.addConnectionLostListener(this::connectionLost);
+        this.channel = channel;
     }
 
 
@@ -142,7 +143,7 @@ public class Server implements Closeable {
 
         synchronized (mapInfoMap) {
             MapInfo info = mapInfoMap.computeIfAbsent(mapName,
-                key -> new MapInfo(mapName, keyType, valueType, isSynchronized));
+                    key -> new MapInfo(mapName, keyType, valueType, isSynchronized));
 
             synchronized (info) {
                 RegisterResponse.Builder builder = RegisterResponse.newBuilder();
@@ -355,5 +356,4 @@ public class Server implements Closeable {
             });
         }
     }
-
 }

@@ -1,0 +1,38 @@
+buildscript {
+  repositories {
+    maven { url "https://plugins.gradle.org/m2/" }
+  }
+  dependencies {
+    classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.12'
+  }
+}
+
+apply plugin: 'com.google.protobuf'
+apply plugin: 'eclipse'
+
+eclipse {
+    classpath {
+        file.beforeMerged { cp ->
+            cp.entries.add( new org.gradle.plugins.ide.eclipse.model.SourceFolder('build/generated/source/proto/main/java', null) )
+        }
+    }
+}
+
+sourceSets {
+	main {
+		java {
+			srcDir 'build/generated/source/proto/main/java'
+		}
+	}
+}
+
+dependencies {
+  implementation 'com.google.protobuf:protobuf-java:3.11.4'
+}
+
+protobuf {
+  protoc {
+    // The artifact spec for the Protobuf Compiler
+    artifact = 'com.google.protobuf:protoc:3.0.0'
+  }
+}

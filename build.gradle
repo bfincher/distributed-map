@@ -1,93 +1,63 @@
-buildscript {
-  repositories {
-    maven { url "https://plugins.gradle.org/m2/" }
-  }
-  dependencies {
-    classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.12'
-  }
-}
-
 plugins {
     id "net.researchgate.release" version "2.6.0"
     id "checkstyle"
 }
 
-apply plugin: 'java'
-apply plugin: 'com.google.protobuf'
-apply plugin: 'idea'
-apply plugin: 'maven-publish'
-apply plugin: "jacoco"
-apply plugin: "net.researchgate.release"
+def baseNexusUrl = "http://192.168.1.2:8082/nexus/content/"
 
 group = 'com.fincher'
 description "Distributed Map"
 
-def baseNexusUrl = "http://192.168.1.2:8082/nexus/content/"
+subprojects {
+	apply plugin: 'java'
+	apply plugin: 'maven-publish'
+	apply plugin: "jacoco"
+	
+	sourceCompatibility = 1.11
+	targetCompatibility = 1.11
+	
+	test {
+		forkEvery 1
+	}
+	
+	task sourcesJar(type: Jar) {
+		from sourceSets.main.allJava
+		archiveClassifier.set("sources")
+	}
 
-repositories {
-  mavenLocal()
-  maven {
-        url "${baseNexusUrl}groups/public"
-  }
-}
+	publishing {
+		publications {
+			mavenJava(MavenPublication) {
+				from components.java
+				artifact tasks.sourcesJar
+			}
+		}
 
-sourceCompatibility = 1.11
-targetCompatibility = 1.11
-
-dependencies {
-  implementation 'com.google.protobuf:protobuf-java:3.11.4'
-  
-  implementation 'com.google.guava:guava:29.0-jre'
-  implementation 'com.fincher:io-channel:2.0.2-SNAPSHOT'
-  implementation 'org.apache.logging.log4j:log4j-api:2.13.1'
-  implementation 'org.apache.logging.log4j:log4j-core:2.13.1'
-
-  testCompile 'junit:junit:4.13'
-  testCompile 'org.mockito:mockito-core:3.3.3'
-  testCompile 'org.awaitility:awaitility:4.0.1'
-}
-
-test {
-    forkEvery 1
-}
-
-protobuf {
-  protoc {
-    // The artifact spec for the Protobuf Compiler
-    artifact = 'com.google.protobuf:protoc:3.0.0'
-  }
-}
-
-task sourcesJar(type: Jar) {
-    from sourceSets.main.allJava
-    archiveClassifier.set("sources")
-}
-
-publishing {
-    publications {
-        mavenJava(MavenPublication) {
-            from components.java
-            artifact tasks.sourcesJar
-        }
-    }
-
-    repositories {
-        maven {
-            credentials {
-                username = "upload"
-                password = "upload"
-            }
+		repositories {
+			maven {
+				credentials {
+					username = "upload"
+					password = "upload"
+				}
         
-            if (project.version.endsWith('-SNAPSHOT')) {
-                url "${baseNexusUrl}repositories/snapshots"
-            } else {
-                url "${baseNexusUrl}repositories/releases"
-            }
-            authentication {
-                basic(BasicAuthentication)
-            }
-        }
-    }
+				if (project.version.endsWith('-SNAPSHOT')) {
+					url "${baseNexusUrl}repositories/snapshots"
+				} else {
+					url "${baseNexusUrl}repositories/releases"
+				}
+				authentication {
+					basic(BasicAuthentication)
+				}
+			}
+		}
+	}
+	
+	repositories {
+		mavenLocal()
+		maven {
+			url "${baseNexusUrl}groups/public"
+		}
+	}
 }
 
 release {
@@ -96,16 +66,6 @@ release {
     }
 }
 
-jacocoTestReport {
-    reports {
-        xml.enabled false
-        csv.enabled false
-        html.enabled true
-    }
-
-    afterEvaluate {
-        classDirectories.setFrom(files(classDirectories.files.collect {
-	    fileTree(dir: it, exclude: 'com/fincher/distributedmap/messages')
-	}))
-    }
-}
+task build{}
+build.dependsOn('distributed-map-messages:build')
+build.dependsOn('distributed-map-server:build')

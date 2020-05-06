@@ -7,4 +7,7 @@
  * in the user manual at https://docs.gradle.org/5.6.1/userguide/multi_project_builds.html
  */
 
-rootProject.name = 'distributed-map'
+rootProject.name = 'com.fincher.distributed-map'
+include 'distributed-map-messages'
+include 'distributed-map-server'
+include 'distributed-map-client'
