@@ -15,6 +15,11 @@ eclipse {
         file.beforeMerged { cp ->
             cp.entries.add( new org.gradle.plugins.ide.eclipse.model.SourceFolder('build/generated/source/proto/main/java', null) )
         }
+        
+        file.whenMerged {
+        	def source = entries.find {it.path == 'build/generated/source/proto/main/java' }
+        	source.entryAttributes['ignore_optional_problems'] = 'true'
+        }
     }
 }
 

@@ -90,6 +90,7 @@ message RequestMapChangeResponse {
     string mapName = 1;
     Transaction transaction = 2;
     bool updateSuccess = 3;
+    uint32 mapTransactionId = 4;
     
     enum FailureReason {
         NO_STATEMENT = 0;
@@ -98,7 +99,7 @@ message RequestMapChangeResponse {
         CLIENT_NOT_REGISTERED = 3;
     }
     
-    FailureReason failureReason = 4;
+    FailureReason failureReason = 5;
 }
 
 message ClientToServerMessage {

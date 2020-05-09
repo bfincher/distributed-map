@@ -294,9 +294,9 @@ public class Server implements Closeable {
 
                 if (response.getUpdateSuccess()) {
                     info.addTransaction(transaction);
-
                     rc.mapTransId = info.getMapTransactionId();
-                    updateClients(mapName);
+                    response.setMapTransactionId(rc.mapTransId);                
+                    updateClientsExcept(mapName, rc.uuid);
                 }
             }
         }
@@ -307,11 +307,13 @@ public class Server implements Closeable {
     }
 
 
-    private void updateClients(String mapName) throws ChannelException {
+    private void updateClientsExcept(String mapName, String exceptUuid) throws ChannelException {
         MapInfo info = mapInfoMap.get(mapName);
         synchronized (info) {
             for (RegisteredClient client : info.getAllRegisteredClients()) {
-                updateClient(mapName, client.channelId);
+                if (!client.uuid.equals(exceptUuid)) {
+                    updateClient(mapName, client.channelId);
+                }
             }
         }
     }
