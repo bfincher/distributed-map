@@ -31,8 +31,9 @@ import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.net.InetSocketAddress;
-import java.util.AbstractMap;
+import java.util.AbstractCollection;
 import java.util.AbstractSet;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -40,60 +41,59 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
-public class DistributedMap<Key extends Serializable, Value extends Serializable> extends AbstractMap<Key, Value> {
+public class DistributedMap<K extends Serializable, V extends Serializable> implements Map<K, V> {
 
-    private final Class<Key> keyType;
-    private final Class<Value> valueType;
+    private final Class<K> keyType;
+    private final Class<V> valueType;
     private final TransformingChannel channel;
     private final String mapName;
     private final boolean isSynchronized;
     private final AtomicInteger mapTransactionId = new AtomicInteger(0);
     private final Lock lock = new ReentrantLock();
     private final Condition isConnectedCondition = lock.newCondition();
+    private final Condition lostConnectedConditionOrMessageReceived = lock.newCondition();
     private boolean isConnected = false;
     private final String uuid = UUID.randomUUID().toString();
-    private final Map<Key, Value> map = new HashMap<>();
+    private final Map<K, V> map = new HashMap<>();
     private boolean isMapLocked = false;
-    private Set<Key> keysLocked = new HashSet<>();
+    private Set<K> keysLocked = new HashSet<>();
 
-    public DistributedMap(String mapName,
+    public static <K extends Serializable, V extends Serializable> DistributedMap<K, V> create(String mapName,
             boolean isSynchronized,
-            Class<Key> keyType,
-            Class<Value> valueType,
+            Class<K> keyType,
+            Class<V> valueType,
             String serverHost,
-            int serverPort)
-            throws InterruptedException, ChannelException {
-        this.mapName = mapName;
-        this.keyType = keyType;
-        this.valueType = valueType;
-
-        channel = new TransformingChannel("channel", TcpClientChannel.createChannel(
+            int serverPort) {
+        TransformingChannel channel = new TransformingChannel("channel", TcpClientChannel.createChannel(
                 "channel",
                 new SimpleStreamIo(false),
                 new InetSocketAddress(0),
                 new InetSocketAddress(serverHost, serverPort)));
 
-        channel.addConnectionEstablishedListener(this::connectionEstablished);
-        channel.addConnectionLostListener(this::connectionLost);
-
-        this.isSynchronized = isSynchronized;
+        return new DistributedMap<K, V>(mapName, isSynchronized, keyType, valueType, channel);
     }
 
 
     protected DistributedMap(String mapName,
             boolean isSynchronized,
-            Class<Key> keyType,
-            Class<Value> valueType,
-            TcpChannelIfc channel) {
+            Class<K> keyType,
+            Class<V> valueType,
+            TransformingChannel channel) {
         this.mapName = mapName;
         this.keyType = keyType;
         this.valueType = valueType;
-        this.channel = new TransformingChannel("channel", channel);
+        this.channel = channel;
         this.isSynchronized = isSynchronized;
+        
+        channel.addConnectionEstablishedListener(this::connectionEstablished);
+        channel.addConnectionLostListener(this::connectionLost);
     }
 
 
@@ -118,18 +118,16 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
 
         ensureConnection();
 
-        if (isSynchronized) {
-            lockMap();
-        }
+        boolean wasMapLocked = lockMap();
 
         try {
-            for (Iterator<Key> iterator = map.keySet().iterator(); iterator.hasNext();) {
-                Key key = iterator.next();
+            for (Iterator<K> iterator = map.keySet().iterator(); iterator.hasNext();) {
+                K key = iterator.next();
                 requestTransaction(key, map.get(key), TransactionType.DELETE);
                 iterator.remove();
             }
         } finally {
-            if (isSynchronized) {
+            if (wasMapLocked) {
                 unlockMap();
             }
         }
@@ -137,22 +135,191 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
 
 
     @Override
-    public synchronized Value put(Key key, Value value) {
-        ensureConnection();
-        Value oldValue = map.get(key);
-        if (isSynchronized) {
-            lockKey(key, oldValue);
+    public boolean containsKey(Object o) {
+        return map.containsKey(o);
+    }
+
+
+    @Override
+    public boolean containsValue(Object o) {
+        return map.containsValue(o);
+    }
+
+
+    @Override
+    public V get(Object o) {
+        return map.get(o);
+    }
+
+
+    @Override
+    public boolean isEmpty() {
+        return map.isEmpty();
+    }
+
+
+    @Override
+    public int size() {
+        return map.size();
+    }
+
+
+    @Override
+    public Set<K> keySet() {
+        Set<K> ks = new AbstractSet<K>() {
+            public Iterator<K> iterator() {
+                return new Iterator<K>() {
+                    private Iterator<Entry<K, V>> i = entrySet().iterator();
+
+                    public boolean hasNext() {
+                        return i.hasNext();
+                    }
+
+
+                    public K next() {
+                        return i.next().getKey();
+                    }
+
+
+                    public void remove() {
+                        i.remove();
+                    }
+                };
+            }
+
+
+            public int size() {
+                return DistributedMap.this.size();
+            }
+
+
+            public boolean isEmpty() {
+                return DistributedMap.this.isEmpty();
+            }
+
+
+            public void clear() {
+                DistributedMap.this.clear();
+            }
+
+
+            public boolean contains(Object k) {
+                return DistributedMap.this.containsKey(k);
+            }
+        };
+
+        return ks;
+    }
+
+
+    @Override
+    public Collection<V> values() {
+        Collection<V> c = new AbstractCollection<V>() {
+            public Iterator<V> iterator() {
+                return new Iterator<V>() {
+                    private Iterator<Entry<K, V>> i = entrySet().iterator();
+
+                    @Override
+                    public boolean hasNext() {
+                        return i.hasNext();
+                    }
+
+
+                    @Override
+                    public V next() {
+                        return i.next().getValue();
+                    }
+
+
+                    @Override
+                    public void remove() {
+                        i.remove();
+                    }
+                };
+            }
+
+
+            @Override
+            public int size() {
+                return DistributedMap.this.size();
+            }
+
+
+            @Override
+            public boolean isEmpty() {
+                return DistributedMap.this.isEmpty();
+            }
+
+
+            @Override
+            public void clear() {
+                DistributedMap.this.clear();
+            }
+
+
+            @Override
+            public boolean contains(Object k) {
+                return DistributedMap.this.containsKey(k);
+            }
+        };
+
+        return c;
+    }
+
+
+    @Override
+    public synchronized void putAll(Map<? extends K, ? extends V> other) {
+        boolean needToUnlockMap = lockMap();
+        try {
+            for (Map.Entry<? extends K, ? extends V> entry : other.entrySet()) {
+                put(entry.getKey(), entry.getValue());
+            }
+        } finally {
+            if (needToUnlockMap) {
+                unlockMap();
+            }
         }
+    }
+
+
+    @Override
+    public synchronized V put(K key, V value) {
+        ensureConnection();
+        V oldValue = map.get(key);
+        boolean needToUnlockKey = lockKey(key, oldValue);
 
         requestTransaction(key, value, TransactionType.UPDATE);
-        keysLocked.remove(key);
+
+        if (needToUnlockKey) {
+            keysLocked.remove(key);
+        }
         return map.put(key, value);
     }
 
 
     @Override
-    public Set<Map.Entry<Key, Value>> entrySet() {
+    public Set<Map.Entry<K, V>> entrySet() {
         return new EntrySet(map.entrySet());
+    }
+
+
+    @Override
+    public synchronized V remove(Object o) {
+        @SuppressWarnings("unchecked")
+        K key = (K) o;
+        V oldValue = map.get(o);
+        if (oldValue != null) {
+            boolean needToUnlockKey = lockKey(key, oldValue);
+            try {
+                requestTransaction(key, oldValue, TransactionType.DELETE);
+                return map.remove(key);
+            } finally {
+                if (needToUnlockKey) {
+                    keysLocked.remove(key);
+                }
+            }
+        }
+        return null;
     }
 
 
@@ -171,6 +338,7 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
         lock.lock();
         try {
             isConnected = false;
+            lostConnectedConditionOrMessageReceived.signal();
         } finally {
             lock.unlock();
         }
@@ -187,7 +355,7 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
                 .setUuid(uuid)
                 .build();
 
-        RegisterResponse response = Rpc.call(ClientToServerMessage.newBuilder().setRegister(reg).build(), channel,
+        RegisterResponse response = rpcCall(ClientToServerMessage.newBuilder().setRegister(reg).build(), channel,
                 resp -> resp.getMsgCase() == MsgCase.REGISTERRESPONSE).getRegisterResponse();
 
         if (!response.getRegistrationSuccess()) {
@@ -196,21 +364,27 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
     }
 
 
-    private void lockMap() {
-        RequestMapLock req = RequestMapLock.newBuilder().setMapName(mapName).setUuid(uuid)
-                .setLatestTransId(mapTransactionId.get()).build();
+    private boolean lockMap() {
 
-        try {
-            RequestMapLockResponse resp = Rpc.call(ClientToServerMessage.newBuilder().setRequestMapLock(req).build(),
-                    channel, r -> r.getMsgCase() == MsgCase.REQUESTMAPLOCKRESPONSE).getRequestMapLockResponse();
+        if (isSynchronized && !isMapLocked) {
+            RequestMapLock req = RequestMapLock.newBuilder().setMapName(mapName).setUuid(uuid)
+                    .setLatestTransId(mapTransactionId.get()).build();
 
-            if (!resp.getLockAcquired()) {
-                throw new DistributedMapException("Unable to obtain map lock");
+            try {
+                RequestMapLockResponse resp = rpcCall(ClientToServerMessage.newBuilder().setRequestMapLock(req).build(),
+                        channel, r -> r.getMsgCase() == MsgCase.REQUESTMAPLOCKRESPONSE).getRequestMapLockResponse();
+
+                if (!resp.getLockAcquired()) {
+                    throw new DistributedMapException("Unable to obtain map lock");
+                }
+
+                isMapLocked = true;
+                return true;
+            } catch (ChannelException | InterruptedException e) {
+                throw new DistributedMapException(e);
             }
-
-            isMapLocked = true;
-        } catch (ChannelException | InterruptedException e) {
-            throw new DistributedMapException(e);
+        } else {
+            return false;
         }
     }
 
@@ -230,35 +404,39 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
     }
 
 
-    private void lockKey(Key key, Value value) {
-        try {
-            RequestKeyLock.Builder req = RequestKeyLock.newBuilder().setKey(serialize(key))
-                    .setMapName(mapName)
-                    .setUuid(uuid);
+    private boolean lockKey(K key, V value) {
+        if (isSynchronized && !isMapLocked && !keysLocked.contains(key)) {
+            try {
+                RequestKeyLock.Builder req = RequestKeyLock.newBuilder().setKey(serialize(key))
+                        .setMapName(mapName)
+                        .setUuid(uuid);
 
-            if (value != null) {
-                req.setValue(serialize(value));
+                if (value != null) {
+                    req.setValue(serialize(value));
+                }
+
+                RequestKeyLockResponse resp = rpcCall(
+                        ClientToServerMessage.newBuilder().setRequestKeyLock(req.build()).build(),
+                        channel,
+                        r -> r.getMsgCase() == MsgCase.REQUESTKEYLOCKRESPONSE)
+                                .getRequestKeyLockResponse();
+
+                if (!resp.getLockAcquired()) {
+                    throw new DistributedMapException("Unable to get lock");
+                }
+
+                keysLocked.add(key);
+                return true;
+
+            } catch (IOException | InterruptedException e) {
+                throw new DistributedMapException(e);
             }
-
-            RequestKeyLockResponse resp = Rpc
-                    .call(ClientToServerMessage.newBuilder().setRequestKeyLock(req.build()).build(),
-                            channel,
-                            r -> r.getMsgCase() == MsgCase.REQUESTKEYLOCKRESPONSE)
-                    .getRequestKeyLockResponse();
-
-            if (!resp.getLockAcquired()) {
-                throw new DistributedMapException("Unable to get lock");
-            }
-
-            keysLocked.add(key);
-
-        } catch (IOException | InterruptedException e) {
-            throw new DistributedMapException(e);
         }
+        return false;
     }
 
 
-    private RequestMapChangeResponse requestTransaction(Key key, Value value, TransactionType transType) {
+    private RequestMapChangeResponse requestTransaction(K key, V value, TransactionType transType) {
 
         try {
             Transaction.Builder builder = Transaction.newBuilder().setKey(serialize(key))
@@ -273,11 +451,11 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
                     .setTransaction(builder.build())
                     .build();
 
-            RequestMapChangeResponse response = Rpc
-                    .call(ClientToServerMessage.newBuilder().setRequestMapChange(req).build(),
-                            channel,
-                            resp -> resp.getMsgCase() == MsgCase.REQUESTMAPCHANGERESPONSE)
-                    .getRequestMapChangeResponse();
+            RequestMapChangeResponse response = rpcCall(
+                    ClientToServerMessage.newBuilder().setRequestMapChange(req).build(),
+                    channel,
+                    resp -> resp.getMsgCase() == MsgCase.REQUESTMAPCHANGERESPONSE)
+                            .getRequestMapChangeResponse();
 
             mapTransactionId.set(response.getMapTransactionId());
 
@@ -309,7 +487,42 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
         }
     }
 
-    private static class TransformingChannel
+
+    private ServerToClientMessage rpcCall(ClientToServerMessage msg,
+            TransformingTcpChannel<ClientToServerMessage, ServerToClientMessage> channel,
+            Predicate<ServerToClientMessage> responsePredicate) throws ChannelException, InterruptedException {
+
+        AtomicReference<ServerToClientMessage> response = new AtomicReference<>();
+
+        Consumer<ServerToClientMessage> msgHandler = received -> {
+            lock.lock();
+            try {
+                response.set(received);
+                lostConnectedConditionOrMessageReceived.signal();
+            } finally {
+                lock.unlock();
+            }
+        };
+
+        lock.lock();
+        try {
+            channel.addTransformedMessageListener(msgHandler, responsePredicate);
+
+            channel.send(msg);
+            lostConnectedConditionOrMessageReceived.await();
+            if (response.get() == null) {
+                throw new DistributedMapException("Connectioin lost");
+            }
+
+            return response.get();
+
+        } finally {
+            lock.unlock();
+            channel.removeTransformedMessageListener(msgHandler);
+        }
+    }
+
+    protected static class TransformingChannel
             extends TransformingTcpChannel<ClientToServerMessage, ServerToClientMessage> {
         public TransformingChannel(String id, TcpChannelIfc delegate) {
             super(id, delegate);
@@ -331,63 +544,55 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
             return new MessageBuffer(msg.toByteArray());
         }
     }
-    
-    
-    private class EntrySet extends AbstractSet<Map.Entry<Key, Value>> {
-        private final Set<Map.Entry<Key, Value>> parent;
-        
-        EntrySet(Set<Map.Entry<Key, Value>> parent) {
+
+    private class EntrySet extends AbstractSet<Map.Entry<K, V>> {
+        private final Set<Map.Entry<K, V>> parent;
+
+        EntrySet(Set<Map.Entry<K, V>> parent) {
             this.parent = parent;
         }
-        
-        
+
+
         @Override
         public int size() {
             return parent.size();
         }
-        
-        
+
+
         @Override
-        public Iterator<Map.Entry<Key, Value>> iterator() {
+        public Iterator<Map.Entry<K, V>> iterator() {
             return new KeySetIterator(parent.iterator());
         }
     }
-    
-    
-    private class KeySetIterator implements Iterator<Map.Entry<Key, Value>> {
-        private final Iterator<Map.Entry<Key, Value>> iterator;
-        private Map.Entry<Key, Value> prev = null;
-        
-        KeySetIterator(Iterator<Map.Entry<Key, Value>> iterator) {
+
+    private class KeySetIterator implements Iterator<Map.Entry<K, V>> {
+        private final Iterator<Map.Entry<K, V>> iterator;
+        private Map.Entry<K, V> prev = null;
+
+        KeySetIterator(Iterator<Map.Entry<K, V>> iterator) {
             this.iterator = iterator;
         }
-        
-        
+
+
         @Override
         public boolean hasNext() {
             return iterator.hasNext();
         }
-        
-        
+
+
         @Override
-        public Map.Entry<Key, Value> next() {
+        public Map.Entry<K, V> next() {
             prev = iterator.next();
             return prev;
         }
-        
-        
+
+
         @Override
         public void remove() {
             Preconditions.checkState(prev != null);
-            
-            boolean needToUnlockKey = false;
-            if (isSynchronized) {
-                if (!isMapLocked && !keysLocked.contains(prev.getKey())) {
-                    lockKey(prev.getKey(), prev.getValue());
-                    needToUnlockKey = true;
-                }
-            }
-            
+
+            boolean needToUnlockKey = lockKey(prev.getKey(), prev.getValue());
+
             try {
                 requestTransaction(prev.getKey(), prev.getValue(), TransactionType.DELETE);
                 iterator.remove();
@@ -395,7 +600,7 @@ public class DistributedMap<Key extends Serializable, Value extends Serializable
                 if (needToUnlockKey) {
                     keysLocked.remove(prev.getKey());
                 }
-                
+
                 prev = null;
             }
         }
