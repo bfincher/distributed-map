@@ -18,7 +18,7 @@ import com.fincher.distributedmap.messages.RequestMapLockResponse;
 import com.fincher.distributedmap.messages.ServerToClientMessage;
 import com.fincher.distributedmap.messages.Transaction;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
-
+import com.fincher.distributedmap.server.MapInfo.TransactionMapEntry;
 import com.fincher.iochannel.ChannelException;
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.SimpleStreamIo;
@@ -294,8 +294,7 @@ public class Server implements Closeable {
 
                 if (response.getUpdateSuccess()) {
                     info.addTransaction(transaction);
-                    rc.mapTransId = info.getMapTransactionId();
-                    response.setMapTransactionId(rc.mapTransId);                
+                    rc.mapTransId = info.getMapTransactionId();               
                     updateClientsExcept(mapName, rc.uuid);
                 }
             }
@@ -331,15 +330,17 @@ public class Server implements Closeable {
     private final void updateClient(MapInfo mapInfo, RegisteredClient client) throws ChannelException {
         synchronized (mapInfo) {
             if (client.mapTransId != mapInfo.getMapTransactionId()) {
-                ClientTransactionUpdate.Builder builder = ClientTransactionUpdate.newBuilder();
-                builder.setMapName(mapInfo.mapName);
-                builder.setMapTransactionId(mapInfo.getMapTransactionId());
-                builder.addAllTransactions(mapInfo.getTransactionsLargerThan(client.mapTransId));
+            	for (TransactionMapEntry entry: mapInfo.getTransactionsLargerThan(client.mapTransId)) {
+            		ClientTransactionUpdate.Builder builder = ClientTransactionUpdate.newBuilder();
+                    builder.setMapName(mapInfo.mapName);
+                    builder.setMapTransactionId(entry.mapTransactionId);
+                    builder.setTransaction(entry.transaction);
+                    client.mapTransId = entry.mapTransactionId;
 
-                ServerToClientMessage msg = ServerToClientMessage.newBuilder()
-                        .setClientTransactionUpdate(builder.build()).build();
-                Utilities.sendMessage(channel, client.channelId, msg);
-                client.mapTransId = mapInfo.getMapTransactionId();
+                    ServerToClientMessage msg = ServerToClientMessage.newBuilder()
+                            .setClientTransactionUpdate(builder.build()).build();
+                    Utilities.sendMessage(channel, client.channelId, msg);	
+            	}
             }
         }
     }

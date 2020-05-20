@@ -130,9 +130,8 @@ class MapInfo {
     }
 
 
-    List<Transaction> getTransactionsLargerThan(int transactionId) {
-        return transactions.byMapTransId.tailMap(transactionId, false).values().stream().map(t -> t.transaction)
-                .collect(Collectors.toUnmodifiableList());
+    List<TransactionMapEntry> getTransactionsLargerThan(int transactionId) {
+    	return transactions.byMapTransId.tailMap(transactionId).values().stream().collect(Collectors.toUnmodifiableList());
     }
 
 

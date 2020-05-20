@@ -7,6 +7,16 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.AfterClass;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.mockito.Mockito;
+
 import com.fincher.distributedmap.messages.ClientToServerMessage;
 import com.fincher.distributedmap.messages.ClientTransactionUpdate;
 import com.fincher.distributedmap.messages.DeRegister;
@@ -25,23 +35,10 @@ import com.fincher.distributedmap.messages.ServerToClientMessage;
 import com.fincher.distributedmap.messages.Transaction;
 import com.fincher.distributedmap.messages.Transaction.TransactionType;
 import com.fincher.distributedmap.server.MapInfo.RegisteredClient;
-
 import com.fincher.iochannel.MessageBuffer;
 import com.fincher.iochannel.tcp.TcpChannelIfc;
 import com.fincher.iochannel.tcp.TcpServerChannel;
-
 import com.google.protobuf.ByteString;
-
-import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.mockito.Mockito;
 
 public class ServerTest {
 
@@ -254,10 +251,14 @@ public class ServerTest {
         ClientTransactionUpdate ctu = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
                 .getClientTransactionUpdate();
         assertEquals(TEST_MAP_NAME, ctu.getMapName());
-        assertEquals(2, ctu.getTransactionsCount());
+        assertEquals(1, ctu.getMapTransactionId());
+        assertEquals(t1, ctu.getTransaction());
+        
+        ctu = ServerToClientMessage.parseFrom(responseMsgBuf.poll().getBytes())
+                .getClientTransactionUpdate();
+        assertEquals(TEST_MAP_NAME, ctu.getMapName());
         assertEquals(2, ctu.getMapTransactionId());
-        assertEquals(t1, ctu.getTransactions(0));
-        assertEquals(t2, ctu.getTransactions(1));
+        assertEquals(t2, ctu.getTransaction());
     }
 
 
@@ -687,10 +688,8 @@ public class ServerTest {
                 assertEquals(TEST_MAP_NAME, ctu.getMapName());
                 assertEquals(1, ctu.getMapTransactionId());
                 
-                List<Transaction> transList = ctu.getTransactionsList();
-                assertEquals(1, transList.size());
-                
-                assertEquals(t1, transList.get(0));
+                Transaction trans = ctu.getTransaction();
+                assertEquals(t1, trans);
                 
                 numClientUpdatesReceived++;
                 break;
